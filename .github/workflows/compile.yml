@@ -24,9 +24,18 @@ jobs:
             texlive-fonts-extra \
             texlive-publishers \
             texlive-binaries \
+            texlive-pictures \
+            texlive-lua-utils \
             make \
+            gnuplot \
             inkscape \
             git
+      - name: Generate gnuplot-lua-tikz.sty
+        # 这一步很关键，gnuplot 需要手动生成这个脚本文件给 LaTeX 使用
+        run: |
+          gnuplot -e "set term lua tikz"
+          # 检查生成的文件是否在当前目录，如果不在，Makefile 可能会报错
+          ls -l gnuplot-lua-tikz.sty
 
       - name: Build Book
         run: |
