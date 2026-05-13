@@ -12,43 +12,24 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install TeX Live and Tools
-        # 只安装构建所需的最小化工具集，节省时间和空间
+      - name: Install Dependencies
         run: |
           sudo apt-get update
+          # 安装完整版 TeX Live 和必要的绘图工具
+          # texlive-full 会直接包含 gnuplot-lua-tikz.sty
           sudo apt-get install -y \
-            texlive-latex-base \
-            texlive-latex-recommended \
-            texlive-latex-extra \
-            texlive-fonts-recommended \
-            texlive-fonts-extra \
-            texlive-publishers \
-            texlive-binaries \
-            texlive-pictures \
-            texlive-luatex \
+            texlive-full \
             make \
-            gnuplot \
             inkscape \
+            gnuplot \
             git
-
-
-      - name: Generate Gnuplot TikZ Styles
-        # 核心步骤：直接运行 gnuplot 命令生成缺少的 .sty 文件
-        run: |
-          mkdir -p gnuplot_tmp
-          cd gnuplot_tmp
-          # 这一步会生成 gnuplot-lua-tikz.sty 和相关的 lua 文件
-          gnuplot -e "set term lua tikz; set output 'dummy.tex'"
-          cd ..
-          # 将生成的关键文件拷贝到当前根目录，确保 LaTeX 能找到
-          cp gnuplot_tmp/gnuplot-lua-tikz* .
-          # 打印一下确认文件确实存在
-          ls -l gnuplot-lua-tikz.sty
 
       - name: Build Book
         run: |
-          # 增加环境变量，告诉 LaTeX 在当前目录寻找宏包
-          export TEXINPUTS=.:$PATH
+          # 检查文件位置（用于调试，如果还报错可以看日志）
+          kpsewhich gnuplot-lua-tikz.sty || echo "Still not found"
+          
+          # 直接运行 make
           make
 
       - name: Upload PDF
