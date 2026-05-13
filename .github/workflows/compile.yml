@@ -25,21 +25,30 @@ jobs:
             texlive-publishers \
             texlive-binaries \
             texlive-pictures \
-            texlive-lua-utils \
+            texlive-luatex \
             make \
             gnuplot \
             inkscape \
             git
-      - name: Generate gnuplot-lua-tikz.sty
-        # 这一步很关键，gnuplot 需要手动生成这个脚本文件给 LaTeX 使用
+
+
+      - name: Generate Gnuplot TikZ Styles
+        # 核心步骤：直接运行 gnuplot 命令生成缺少的 .sty 文件
         run: |
-          gnuplot -e "set term lua tikz"
-          # 检查生成的文件是否在当前目录，如果不在，Makefile 可能会报错
+          mkdir -p gnuplot_tmp
+          cd gnuplot_tmp
+          # 这一步会生成 gnuplot-lua-tikz.sty 和相关的 lua 文件
+          gnuplot -e "set term lua tikz; set output 'dummy.tex'"
+          cd ..
+          # 将生成的关键文件拷贝到当前根目录，确保 LaTeX 能找到
+          cp gnuplot_tmp/gnuplot-lua-tikz* .
+          # 打印一下确认文件确实存在
           ls -l gnuplot-lua-tikz.sty
 
       - name: Build Book
         run: |
-          # 执行项目自带的构建脚本
+          # 增加环境变量，告诉 LaTeX 在当前目录寻找宏包
+          export TEXINPUTS=.:$PATH
           make
 
       - name: Upload PDF
