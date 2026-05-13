@@ -1,0 +1,31 @@
+name: Compile Book PDF
+on: [push, workflow_dispatch] # push 代码或手动点击时触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # 使用预装了完整 LaTeX 环境的容器，速度最快
+    container: islandoftex/texlive:latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive # 如果项目依赖其他子模块
+
+      - name: Install Additional Tools
+        run: |
+          apt-get update
+          apt-get install -y make inkscape git
+
+      - name: Build Book
+        run: |
+          # 针对你提到的项目，运行 make 命令
+          # 注意：如果 Makefile 里有 git clone，容器内需要联网权限
+          make
+
+      - name: Upload PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: Book-PDF
+          path: book.pdf # 确保这里的文件名和 Makefile 生成的文件名一致
