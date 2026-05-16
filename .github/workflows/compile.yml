@@ -20,10 +20,12 @@ jobs:
           sudo apt-get install -y \
             texlive-full \
             make \
-            mpage \
             inkscape \
             gnuplot \
             git
+          # 🌟 核心：手动下载并安装 mpage 的 deb 包
+          wget http://mirrors.kernel.org/ubuntu/pool/universe/m/mpage/mpage_2.5.6+dfsg-1_amd64.deb
+          sudo apt-get install -y ./mpage_2.5.6+dfsg-1_amd64.deb
 
       - name: Build Book
         run: |
