@@ -36,4 +36,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Book-PDF
-          path: book.pdf
+          path: |
+            book.pdf
+            xv6-src-booklet.pdf
