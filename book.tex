@@ -18,22 +18,23 @@
 \usepackage[UTF8, scheme=plain]{ctex}
 
 % ==================== 字体精准配置 (针对 xelatex) ====================
-% 1. 配置中文正文与粗体 (使用 font 目录下的静态思源宋体)
+% ==================== 字体精准配置 (针对 xelatex) ====================
+% 1. 配置中文正文与粗体（根据你的 ls 结果，实际为 .ttf 格式）
 \setCJKmainfont[
     Path = font/,
-    Extension = .otf,
+    Extension = .ttf,
     BoldFont = NotoSerifSC-Bold
 ]{NotoSerifSC-Regular}
 
-% 2. 配置英文正文与粗体 (使用原项目自带的 MinionPro，保持原汁原味)
+% 2. 配置英文正文与粗体（原版自带的 MinionPro 家族，实际为 .otf 格式）
 \setmainfont[
     Path = font/,
     Extension = .otf,
     BoldFont = MinionPro-Bold,
-    ItalicFont = MinionPro-It.otf
+    ItalicFont = MinionPro-It
 ]{MinionPro-Regular}
 
-% 3. 配置全书等宽代码字体 (使用刚才为你挑选的标准静态版 JetBrains Mono)
+% 3. 配置全书等宽代码字体（JetBrains Mono，实际为 .ttf 格式）
 \setmonofont[
     Path = font/,
     Extension = .ttf,
