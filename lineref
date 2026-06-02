@@ -76,7 +76,7 @@ def lookup_regex(path, fname, pat1, pat2=None):
    
 def lineref(l):
    # file:/pattern/delta
-   p = re.compile(r'\\lineref{(.*):\/(.*)\/([+-]?\d+)?}',re.UNICODE)
+   p = re.compile(r'\\lineref{(.*?):\/(.*?)\/([+-]?\d+)?}',re.UNICODE)
    m = p.search(l)
    if m != None:
       f = m.groups()[0]
@@ -88,8 +88,7 @@ def lineref(l):
          delta = int(m.groups()[2])
       if i != None:
          l = p.sub(r'\\showlineref{%s}{%s}{%s}' % (f,str(i+delta),fmt_line(i0+delta)), l)
-         print(l, end="")
-      return
+
    # fileref
    p = re.compile(r'\\fileref\{([^}]*)\}',re.UNICODE)
    m = p.search(l)
@@ -98,10 +97,9 @@ def lineref(l):
       n0 = lookup_fileref_booklet(f)
       print("fileref", f, n0, file=sys.stderr)
       l = p.sub(r'\\showfileref{%s}{%s}' % (f, fmt_line(n0)), l)
-      print(l, end="")
-      return
+
    # file:/pattern/delta,pattern/delta
-   p = re.compile(r'\\linerefs{(.*):\/(.*)\/([+-]?\d+)?,\/(.*)\/([+-]?\d+)?}',re.UNICODE)
+   p = re.compile(r'\\linerefs{(.*?):\/(.*?)\/([+-]?\d+)?,\/(.*)\/([+-]?\d+)?}',re.UNICODE)
    m = p.search(l)
    if m != None:
       f = m.groups()[0]
@@ -115,8 +113,6 @@ def lineref(l):
          delta2 = int(m.groups()[4])
       if i != None and j != None:
          l = p.sub(r'\\showlinerefs{%s}{%s}{%s}{%s}{%s}' % (f, str(i+delta1), str(j+delta2), fmt_line(i0+delta1), fmt_line(j0+delta2)), l)
-         print(l, end="")
-      return
    print(l, end="")
 
 with open(sys.argv[1], encoding='utf-8') as f:  
