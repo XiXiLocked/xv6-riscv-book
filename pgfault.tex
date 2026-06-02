@@ -1,296 +1,110 @@
-\chapter{Page faults}
+\chapter{页故障}
 \label{CH:PGFAULTS}
 %% 
 
-The RISC-V CPU raises a page-fault exception
-when a virtual address is used that has no mapping
-in the page table, or has a mapping whose \lstinline{PTE_V}
-flag is clear, or a mapping whose permission bits
-(\lstinline{PTE_R},
-\lstinline{PTE_W},
-\lstinline{PTE_X},
-\lstinline{PTE_U})
-forbid the operation being attempted.
-RISC-V distinguishes three
-kinds of page fault: load page faults (caused by load instructions),
-store page faults (caused by store instructions),
-and instruction
-page faults (caused by fetches of instructions to be executed).  The
-\lstinline{scause} register indicates the type of the
-page fault and the \indexcode{stval} register contains the address
-that couldn't be translated.
+当使用了一个在页表中没有映射、或其映射的 \lstinline{PTE_V}
+标志被清除、或其权限位（\lstinline{PTE_R}、
+\lstinline{PTE_W}、
+\lstinline{PTE_X}、
+\lstinline{PTE_U}）
+禁止了所尝试的操作的虚拟地址时，RISC-V CPU 会引发一个页故障异常。
+RISC-V 区分三种
+页故障：取数页故障（由取数指令引起）、
+存数页故障（由存数指令引起）
+和执行页故障（由要执行指令的取指引起）。
+\lstinline{scause} 寄存器指示了页故障的类型，
+而 \indexcode{stval} 寄存器则包含了无法转换的地址。
 
-The combination of page tables and page faults is a powerful tool.
-Page tables give the kernel a level of indirection between virtual and
-physical addresses, so that the kernel can control the structure and
-content of address spaces. Page faults allow the kernel to intercept
-loads and stores and, by modifying the page table, specify on the fly
-what data those references refer to. The kernel can use these
-capabilities to increase efficiency: for example, copy-on-write fork
-allows the kernel to transparently share memory between parent and
-child, avoiding the cost of copying pages that neither write.
-Application programmers can also benefit. One possibility is
-memory-mapped files, where the kernel uses paging to cause a file's
-content to appear in an application's address space, transparently
-reading file blocks in response to page faults. Another is lazy memory
-allocation, which allows a program to ask for a huge virtual
-address space, but only to pay the cost of allocating physical memory
-for the pages the program actually reads and writes. xv6 uses page
-faults for only one purpose: lazy allocation.
+页表与页故障的组合是一个强大的工具。
+页表为内核提供了一层虚拟地址到物理地址之间的间接性，使得内核能够控制地址空间的结构和内容。页故障则允许内核截获取数和存数操作，并通过修改页表来实时指定这些访问所引用的数据。内核可以利用这些能力来提高效率：例如，写时复制的 fork 使得内核能够在父进程与子进程之间透明地共享内存，从而避免复制双方都未写入的页面的开销。
+应用程序员也能从中受益。其中一个可能性是内存映射文件，即内核利用分页机制使文件的内容出现在应用程序的地址空间中，并透明地根据页故障来读取文件块。另一个可能性是惰性内存分配，它允许程序申请一个巨大的虚拟地址空间，但只为程序实际读写的页面分配物理内存。xv6 仅将页故障用于一个目的：惰性分配。
 
-Before proceeding, please read the functions {\tt sys\_sbrk()} in {\tt
-  kernel/sysproc.c}, and {\tt vmfault} in {\tt kernel/vm.c}.
-Search for calls to {\tt vmfault} in {\tt kernel/trap.c} and {\tt
-kernel/vm.c}.
+在继续之前，请阅读 {\tt kernel/sysproc.c} 中的函数 {\tt sys\_sbrk()}，以及 {\tt kernel/vm.c} 中的 {\tt vmfault}。
+在 {\tt kernel/trap.c} 和 {\tt kernel/vm.c} 中搜索对 {\tt vmfault} 的调用。
 
-\section{Lazy allocation}
+\section{惰性分配}
 \label{sec:lazy}
 
-xv6's \indextext{lazy allocation} has two parts.
-First, when an application asks for memory by calling
-\lstinline{sbrk} with the flag \lstinline{SBRK_LAZY}, the kernel notes the increase in size, but does not
-allocate physical memory and does not create PTEs for the new range of
-virtual addresses.  Second, on a page fault on one of those new
-addresses, the kernel allocates a page of physical memory and maps it
-into the page table.  The kernel implements lazy allocation
-transparently to applications: no modifications to applications are
-necessary for them to benefit.
+xv6 的 \indextext{惰性分配} 包含两个部分。
+首先，当应用程序通过调用带有 \lstinline{SBRK_LAZY} 标志的 \lstinline{sbrk} 请求内存时，内核会记录大小的增长，但不会为新范围的虚拟地址分配物理内存，也不会创建页表项（PTE）。其次，当这些新地址上发生页故障时，内核会分配一页物理内存并将其映射到页表中。内核实现的惰性分配对应用程序是透明的：应用程序无需修改即可从中受益。
 
-Lazy allocation is convenient for applications because they don't have
-to accurately predict how much memory they will need.  For example, an
-application may process input, but not know in advance how large the
-input will be.  With lazy allocations an application can ask for
-memory for the worst case, but not have to pay for this worst case:
-the kernel doesn't have to do any work at all for pages that the
-application never uses.
+惰性分配对应用程序来说非常方便，因为它们不需要精确预测自己将需要多少内存。例如，一个应用程序可能需要处理输入，但事先不知道输入会有多大。通过惰性分配，应用程序可以按最坏情况请求内存，但不必为这种最坏情况付出代价：对于应用程序从未使用的页面，内核完全不需要做任何工作。
 
-Furthermore, if the application is asking to grow the address space by
-a lot, then \lstinline{sbrk} without lazy allocation is expensive: if
-an application asks for a gigabyte of memory, the kernel has to
-allocate and zero 262,144 4096-byte physical pages.  Lazy allocation allows
-this cost to be spread over time.  On the other hand, lazy allocation
-incurs the extra overhead of page faults, which involve a user/kernel
-transition.  Operating systems can reduce this cost by allocating a
-batch of consecutive pages per page fault instead of one page and by
-specializing the kernel entry/exit code for such page-faults (though
-xv6 does neither).
+此外，如果应用程序要求将地址空间增加很大的量，那么不使用惰性分配的 \lstinline{sbrk} 代价很高：如果应用程序请求 1 GB 的内存，内核必须分配并清零 262,144 个 4096 字节的物理页。惰性分配则可以将这种成本分摊到一段时间内。另一方面，惰性分配会带来额外的页故障开销，这涉及到用户/内核态的切换。操作系统可以通过每次页故障分配一批连续的页面（而不是一个页面），以及针对这类页故障专门优化内核的进入/退出代码（尽管 xv6 两者都没有做）来降低这种开销。
 
-On the other hand, when taking a page fault for a lazily-allocated
-page, the kernel may find that it has not free memory to allocate.  In
-this case, the kernel has no easy way of returning an out-of-memory
-error to the application and instead kills the application.  For
-applications that prefer an error on a failed allocation, xv6 allows
-an application to allocate memory eagerly by calling \lstinline{sbrk}
-with the flag \lstinline{SBRK_EAGER}.
+另一方面，当为惰性分配的页面发生页故障时，内核可能会发现没有空闲内存可供分配。在这种情况下，内核没有简单的方法向应用程序返回内存不足的错误，而是会杀死该应用程序。对于那些希望在分配失败时收到错误信息的应用程序，xv6 允许它们通过调用带有 \lstinline{SBRK_EAGER} 标志的 \lstinline{sbrk} 来急切地分配内存。
 
-\section{Code}
+\section{代码}
 
-The system call {\tt sbrk(n)} grows (or shrinks if {\tt n}
-is negative) a process's memory size by {\tt n} bytes, and returns
-the start of the newly allocated region (i.e., the old size).
-The kernel implementation is \lstinline{sys_sbrk}
-\lineref{kernel/sysproc.c:/^sys_sbrk/}.
+系统调用 {\tt sbrk(n)} 会将进程的内存大小增加（如果 {\tt n} 为负数则减少）{\tt n} 字节，并返回新分配区域的起始地址（即旧的大小）。
+内核的实现是 \lstinline{sys_sbrk}，见 \lineref{kernel/sysproc.c:/^sys_sbrk/}。
 
-If the application specifies \lstinline{SBRK_EAGER}, the system
-call is implemented by the function
-\lstinline{growproc}
-\lineref{kernel/proc.c:/^growproc/}.
-\lstinline{growproc} calls \lstinline{uvmalloc}.
-\lstinline{uvmalloc}
-\lineref{kernel/vm.c:/^uvmalloc/}
-allocates physical memory with {\tt kalloc}, zeros the allocated memory,
-and adds PTEs to the user page table with {\tt mappages}.
+如果应用程序指定了 \lstinline{SBRK_EAGER}，该系统调用由函数 \lstinline{growproc} 实现，见 \lineref{kernel/proc.c:/^growproc/}。
+\lstinline{growproc} 会调用 \lstinline{uvmalloc}。
+\lstinline{uvmalloc}（见 \lineref{kernel/vm.c:/^uvmalloc/}）使用 {\tt kalloc} 分配物理内存，将分配的内存清零，然后使用 {\tt mappages} 在用户页表中添加页表项（PTE）。
 
-If the applications allocates memory lazily, \lstinline{sys_sbrk}
-just increments the process's size
-(\lstinline{myproc()->sz}) by {\tt n} and returns the old size; it does
-not allocate physical memory or add PTEs to the process's page table.
+如果应用程序进行惰性内存分配，\lstinline{sys_sbrk} 只是将进程的大小（\lstinline{myproc()->sz}）增加 {\tt n} 并返回旧的大小；它既不分配物理内存，也不向进程的页表中添加 PTE。
 
-When a process loads or stores to a virtual address that
-lacks a valid page-table mapping, the CPU will
-raise \indextext{page-fault exception}.
-\lstinline{usertrap} checks for this case
-\lineref{kernel/trap.c:/page fault/}
-and calls \lstinline{vmfault}
-\lineref{kernel/vm.c:/^vmfault/}
-to handle the page fault.  \lstinline{vmfault}
-checks that the faulting address is within the
-region previously granted by {\tt sbrk},
-allocates a page of physical memory with {\tt kalloc},
-zeros the allocated page, and adds a PTE to the user page table with
-{\tt mappages}.  Xv6 sets the \lstinline{PTE_W}, \lstinline{PTE_R},
-\lstinline{PTE_U}, and \lstinline{PTE_V} flags in the PTE for the
-new page. Then, \lstinline{usertrap} resumes the
-process at the instruction that caused the fault. Because the
-PTE is now valid, the re-executed load or store instruction
-will execute without a fault.
+当一个进程加载或存储到某个缺少有效页表映射的虚拟地址时，CPU 会引发 \indextext{页故障异常}。
+\lstinline{usertrap} 会检查这种情况（见 \lineref{kernel/trap.c:/page fault/}），并调用 \lstinline{vmfault}（见 \lineref{kernel/vm.c:/^vmfault/}）来处理页故障。\lstinline{vmfault} 会检查发生故障的地址是否在之前通过 {\tt sbrk} 授予的区域内，使用 {\tt kalloc} 分配一页物理内存，将分配的页面清零，并使用 {\tt mappages} 在用户页表中添加一个 PTE。Xv6 会在新页面的 PTE 中设置 \lstinline{PTE_W}、\lstinline{PTE_R}、\lstinline{PTE_U} 和 \lstinline{PTE_V} 标志。然后，\lstinline{usertrap} 会在引发故障的那条指令处恢复进程的运行。由于现在 PTE 已经有效，重新执行的取数或存数指令将不会再触发故障。
 
-If an application frees memory using {\tt sbrk}, \lstinline{sys_sbrk}
-calls \lstinline{shrinkproc}, which calls \lstinline{uvmdealloc}.  The
-real work is done by {\tt uvmunmap} \lineref{kernel/vm.c:/^uvmunmap/},
-which uses {\tt walk} to find PTEs.  Since some pages may never have
-been used by the process and thus never have been allocated by {\tt
-  vmfault}, {\tt uvmunmap} skips PTEs without the \lstinline{PTE_V}
-flag.  If a PTE mapping is valid, {\tt uvmunmap} calls {\tt kfree}
-to free the physical memory it refers to.
+如果应用程序使用 {\tt sbrk} 释放内存，\lstinline{sys_sbrk} 会调用 \lstinline{shrinkproc}，后者会调用 \lstinline{uvmdealloc}。真正完成工作的是 {\tt uvmunmap}（见 \lineref{kernel/vm.c:/^uvmunmap/}），它使用 {\tt walk} 来查找 PTE。由于某些页面可能从未被进程使用过，因而也从未被 {\tt vmfault} 分配过，所以 {\tt uvmunmap} 会跳过那些没有 \lstinline{PTE_V} 标志的 PTE。如果某个 PTE 映射是有效的，{\tt uvmunmap} 会调用 {\tt kfree} 来释放它所指向的物理内存。
 
-Note that Xv6 uses a process's page table not just to tell the
-hardware how to map user virtual addresses, but also as the only
-record of which physical memory pages are allocated to that
-process. That is the reason why freeing user memory (in {\tt
-  uvmunmap}) requires examination of the user page table.
+请注意，Xv6 使用进程的页表不仅是为了告诉硬件如何映射用户虚拟地址，也是作为记录该进程分配了哪些物理内存页的唯一依据。这就是为什么释放用户内存（在 {\tt uvmunmap} 中）需要检查用户页表。
 
-\section{Real world: Copy-On-Write (COW) fork}
+\section{现实世界：写时复制（COW）fork}
 
-Many kernels (though not xv6) use page faults to implement
-\indextext{copy-on-write (COW) fork}. The {\tt fork} system call
-promises that the
-child sees memory whose initial content is the same as the parent's
-memory at the time of the fork. One way to implement this is to copy
-the entire memory of the parent to newly allocated physical memory for
-the child; this is what xv6 does. Copying can be slow, and it
-would be more efficient if the child could share the parent's physical
-memory. A straightforward implementation of this would not work,
-however, since it would cause the parent and child to disrupt each
-other's execution with their writes to the shared stack and heap.
+许多内核（尽管不是 xv6）利用页故障来实现 \indextext{写时复制（COW）fork}。{\tt fork} 系统调用保证子进程在 fork 时刻看到的内存初始内容与父进程相同。一种实现方式是父进程的整个内存复制到子进程新分配的物理内存中；这正是 xv6 的做法。复制可能会很慢，如果子进程能够共享父进程的物理内存，效率会更高。然而，简单的共享实现是行不通的，因为父进程和子进程对共享的栈和堆的写入会相互干扰。
 
-Copy-on-write fork causes parent and child to safely share physical
-memory by appropriate use of page-table permissions and page faults.
-The basic plan is for the parent and child to initially share all
-physical pages, but for each to map them read-only (with the
-\lstinline{PTE_W} flag clear). Parent and child can then read from the
-shared physical memory. If either writes a shared page, the RISC-V CPU
-raises a page-fault exception. A kernel supporting COW would respond
-by allocating a new page of physical memory and copying the shared
-page into that new page. Then kernel would change the relevant PTE in
-the faulting process's page table to point to the copy and to allow
-writes as well as reads, and then resume the faulting process at the
-instruction that caused the fault. Because the PTE now allows writes,
-the re-executed store instruction will execute without a fault, and
-will modify a private copy of the page rather than the shared page.
+写时复制的 fork 通过适当使用页表权限和页故障，使得父进程和子进程能够安全地共享物理内存。基本计划是父进程和子进程初始时共享所有物理页，但每个进程都将这些页映射为只读（即清除 \lstinline{PTE_W} 标志）。这样父进程和子进程都可以从共享的物理内存中读取。如果其中任何一个进程写入某个共享页，RISC-V CPU 就会引发一个页故障异常。支持 COW 的内核会通过分配一页新的物理内存，并将共享页的内容复制到这个新页中来响应。然后，内核会将引发故障的进程的页表中的相应 PTE 修改为指向这个副本，并同时允许读写，最后在引发故障的那条指令处恢复该进程的执行。由于现在 PTE 允许写入，重新执行的存数指令将不再触发故障，并且修改的是页面的私有副本，而非共享页面。
 
-Copy-on-write requires book-keeping
-to help decide when physical pages can be freed, since each page can
-be referenced by a varying number of page tables depending on the history of
-forks, page faults, execs, and exits. This book-keeping allows
-an important optimization: if a process incurs a store page
-fault and the physical page is only referred to from that process's
-page table, no copy is needed.
+写时复制需要额外的记账信息，以帮助决定何时可以释放物理页，因为根据 fork、页故障、exec 和 exit 的历史记录，每个物理页可能被不同数量的页表所引用。这种记账机制还允许一个重要的优化：如果一个进程发生了存储页故障，并且该物理页只被该进程的页表所引用，那么就不需要进行复制。
 
-Copy-on-write makes \lstinline{fork} faster, since \lstinline{fork}
-need not copy memory. Some of the memory will have to be copied
-later, when written, but it's often the case that most of the
-memory never has to be copied.
-A common example is
-\lstinline{fork} followed by \lstinline{exec}:
-a few pages may be written after the \lstinline{fork},
-but then the child's \lstinline{exec} releases
-the bulk of the memory inherited from the parent.
-Copy-on-write \lstinline{fork} eliminates the need to
-ever copy this memory.
-Furthermore, COW fork is transparent:
-no modifications to applications are necessary for
-them to benefit.
+写时复制使得 \lstinline{fork} 更快，因为 \lstinline{fork} 不需要复制内存。某些内存可能会在之后被写入时才需要复制，但通常大部分内存永远都不需要复制。一个常见的例子是 \lstinline{fork} 后跟着 \lstinline{exec}：在 \lstinline{fork} 之后可能只有少数几个页面会被写入，然后子进程的 \lstinline{exec} 会释放从父进程继承来的大部分内存。写时复制的 \lstinline{fork} 完全省去了复制这些内存的必要。此外，COW fork 是透明的：应用程序无需任何修改即可从中受益。
 
-\section{Real world: Demand paging}
+\section{现实世界：请求分页}
 
-Yet another widely-used feature that exploits page faults is
-\indextext{demand paging}.  In the \lstinline{exec} system call, xv6 loads all 
-of an application's text
-and data into memory before starting
-the application.  Since applications
-can be large and reading from disk takes time, this startup cost can
-be noticeable to users. To
-decrease startup time, a modern kernel doesn't initially load
-the executable file into memory, but just creates the user page table with
-all PTEs marked invalid. The kernel starts the program running;
-each time the program uses a page for the first time, a page
-fault occurs, and in response
-the kernel reads the content of the page from disk and
-maps it into the user address space.  Like COW fork and lazy
-allocation, the kernel can implement this feature transparently to
-applications.
+另一个广泛使用页故障的特性是 \indextext{请求分页}。在 \lstinline{exec} 系统调用中，xv6 会在启动应用程序之前将其所有的文本和数据都加载到内存中。由于应用程序可能很大，而且从磁盘读取需要时间，这种启动开销对用户来说可能是明显的。为了减少启动时间，现代内核不会一开始就将可执行文件加载到内存中，而是只创建用户页表，并将所有 PTE 标记为无效。内核随后启动程序运行；每当程序第一次使用某个页面时，就会发生一次页故障，作为响应，内核会从磁盘读取该页面的内容，并将其映射到用户的地址空间中。与 COW fork 和惰性分配一样，内核可以以对应用程序透明的方式实现这一特性。
 
-The programs running on a computer may need more memory than the
-computer has RAM. To cope gracefully, the operating system may
-implement \indextext{paging to disk}. The idea is to store only a
-fraction of user pages in RAM, and to store the rest on disk in a
-\indextext{paging area}. The kernel marks PTEs that correspond to
-memory stored in the paging area (and thus not in RAM) as invalid. If
-an application tries to use one of the pages that has been {\it paged
-  out} to disk, the application will incur a page fault, and the page
-must be {\it paged in}: the kernel trap handler will allocate a page
-of physical RAM, read the page from disk into the RAM, and modify the
-relevant PTE to point to the RAM.
+计算机上运行的程序可能需要的内存可能超过计算机拥有的 RAM。为了优雅地应对这种情况，操作系统可能会实现 \indextext{分页到磁盘}。其思路是只将用户页面的一部分存放在 RAM 中，而将其余部分存放在磁盘的 \indextext{分页区域} 中。内核将对应于存放在分页区域（因此不在 RAM 中）的内存的 PTE 标记为无效。如果某个应用程序试图使用一个已被{\it 换出}到磁盘的页面，应用程序将触发一个页故障，然后该页面必须被{\it 换入}：内核的陷阱处理程序会分配一页物理 RAM，从磁盘将该页面读到 RAM 中，并修改相应的 PTE 使其指向该 RAM。
 
-What happens if a page needs to be paged in, but there is no free
-physical RAM? In that case, the kernel must first free a physical page
-by paging it out or {\it evicting} it to the paging area on disk, and
-marking the PTEs referring to that physical page as invalid. Eviction
-is expensive, so paging performs best if it's infrequent: if
-applications use only a subset of their memory pages and the union of
-the subsets fits in RAM. This property is often referred to as having
-good locality of reference. As with many virtual memory techniques,
-kernels usually implement paging to disk in a way that's transparent
-to applications.
+当需要换入一个页面，但没有空闲的物理 RAM 时会发生什么？在这种情况下，内核必须首先通过将一个物理页换出（或{\it 驱逐}）到磁盘上的分页区域，并标记指向该物理页的 PTE 为无效，来释放一个物理页。驱逐操作代价高昂，因此分页在不频繁发生时性能最佳：即应用程序只使用其内存页的一个子集，并且这些子集的并集能够放入 RAM 中。这一性质通常被称为具有良好的引用局部性。与许多虚拟内存技术一样，内核通常以对应用程序透明的方式实现分页到磁盘。
 
-Computers often operate with little or no {\it free} physical memory,
-regardless of how much RAM the hardware provides. For example, cloud
-providers multiplex many customers on a single machine to use their
-hardware cost-effectively. As another example, users run many
-applications on smart phones in a small amount of physical memory. In
-such settings allocating a page may require first evicting an existing
-page. Thus, when free physical memory is scarce, allocation is
-expensive.
+无论硬件提供多少 RAM，计算机通常都只有很少甚至没有{\it 空闲}物理内存。例如，云提供商为了经济高效地利用硬件，会在单台机器上复用大量客户。又例如，用户在有限的物理内存中的智能手机上运行许多应用程序。在这种环境下，分配一个页面可能首先需要驱逐一个现有页面。因此，当空闲物理内存稀缺时，分配操作的成本很高。
 
-Lazy allocation and demand paging are particularly advantageous when
-free memory is scarce and programs actively use only a fraction of
-their allocated memory. These techniques can also avoid the work
-wasted when a page is allocated or loaded but either never used or
-evicted before it can be used.
+在空闲内存稀缺且程序只活跃地使用其已分配内存的一小部分时，惰性分配和请求分页尤其有利。这些技术还可以避免当页面被分配或加载后，要么从未使用，要么在使用之前就被换出时浪费的工作。
 
-\section{Real world: Memory-mapped files}
+\section{现实世界：内存映射文件}
 
-Other features that combine paging and page-fault exceptions include
-automatically extending stacks and \indextext{memory-mapped files},
-which are files that a program maps into its address space using
-the \texttt{mmap} system call so that the program can read and write
-them using load and store instructions.
+其他结合了分页和页故障异常的特性包括自动增长的栈和 \indextext{内存映射文件}。所谓内存映射文件，是指程序使用 \texttt{mmap} 系统调用将其映射到自己的地址空间中，从而可以通过取数和存数指令来读写这些文件。
 
-% "virtual" memory, eviction, page-in
-% lazy allocation
-% auto stack expansion
-% guard pages
-% mmap files
+% “虚拟”内存，换出，换入
+% 惰性分配
+% 自动栈扩展
+% 保护页
+% mmap 文件
 % cow fork
-% shared text, shared libraries
-% demand paging of text
-% virtual machine migration
-% distributed shared memory
-% fast IPC
-% zero-copy write
+% 共享文本，共享库
+% 请求分页文本
+% 虚拟机迁移
+% 分布式共享内存
+% 快速 IPC
+% 零拷贝写入
 % DPDK
-% (unified block / page cache)
+% （统一块 / 页缓存）
 
 %% 
-\section{Exercises}
+\section{练习}
 %% 
 
 \begin{enumerate}
 
-\item Write a user program that grows its address space by one byte by calling
-\lstinline{sbrk(1)}.
-Run the  program and investigate the page table for the program before the call
-to
-\lstinline{sbrk}
-and after the call to
-\lstinline{sbrk}.
-How much space has the kernel allocated?  What does the
-PTE
-for the new memory contain?
+\item 编写一个用户程序，通过调用 \lstinline{sbrk(1)} 将其地址空间增加一个字节。
+运行该程序，并在调用 \lstinline{sbrk} 之前和之后检查程序的页表。
+内核分配了多少空间？新内存对应的 PTE 中包含什么内容？
 
-\item Implement COW fork.
+\item 实现 COW fork。
 
-\item Implement {\tt mmap}.
+\item 实现 {\tt mmap}。
 
 \end{enumerate}

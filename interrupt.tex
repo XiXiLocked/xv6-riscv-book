@@ -1,305 +1,80 @@
-\chapter{Interrupts and device drivers}
+\chapter{中断与设备驱动程序}
 \label{CH:INTERRUPT}
 
-A
-\indextext{driver}
-is the code in an operating system that manages a particular device:
-it configures the device hardware,
-tells the device to perform operations,
-handles the resulting interrupts,
-and interacts with processes using the device.
-Driver code can be tricky
-because a driver executes concurrently with the device,
-and often concurrently with processes using the device.  In
-addition, the driver must understand the device's hardware interface,
-which can be complex and poorly documented.
+\indextext{驱动程序}
+是操作系统中管理特定设备的代码：它配置设备硬件，告知设备执行操作，处理由此产生的中断，并与使用该设备的进程进行交互。驱动程序代码可能很棘手，因为驱动程序与设备并发执行，并且通常与使用该设备的进程并发执行。此外，驱动程序必须理解设备的硬件接口，这可能很复杂且文档不全。
 
-Devices that need attention from the operating system can usually be
-configured to generate interrupts, which are one type of trap.
-The kernel trap handling code recognizes when a device
-has raised an interrupt and calls the driver's interrupt handler;
-in xv6, this dispatch happens in {\tt devintr} \lineref{kernel/trap.c:/^devintr/}.
+需要操作系统关注的那些设备通常可以配置为产生中断，中断是陷阱的一种类型。内核陷阱处理代码在识别出某个设备引发了中断后，会调用该驱动器的中断处理程序；在 xv6 中，这个分发工作在 {\tt devintr} \lineref{kernel/trap.c:/^devintr/} 中完成。
 
-Many device drivers execute code in two contexts: a \indextext{top
-half} that runs in a process's kernel thread, and a \indextext{bottom
-half} that executes at interrupt time. The top half
-is called via system calls such as {\tt read} and {\tt write} that want
-the device to perform I/O. This code may ask the hardware to start an
-operation (e.g., ask the disk to read a block); then the code waits for
-the operation to complete. Eventually the device completes the
-operation and raises an interrupt. The driver's interrupt handler,
-acting as the bottom half,
-figures out what operation has completed, wakes up a waiting
-process if appropriate, and tells the hardware to start work
-on the next operation, if any.
+许多设备驱动器的代码在两个上下文中执行：一个在进程的内核线程中运行的\textindex{顶半部}，另一个在中断时执行的\textindex{底半部}。顶半部通过诸如 {\tt read} 和 {\tt write} 等希望设备执行 I/O 的系统调用被调用。这部分代码可能会请求硬件启动一个操作（例如，要求磁盘读取一个块）；然后该代码等待操作完成。最终设备完成操作并引发一个中断。驱动器的中断处理程序充当底半部，它会判断哪个操作已完成，适时唤醒等待的进程，并通知硬件开始处理下一个操作（如果有的话）。
 
-\section{Code: Console input}
+\section{代码：控制台输入}
 
-The console driver \fileref{kernel/console.c}
-is a simple illustration of driver structure. The
-console driver accepts characters typed by a human, via the \indextext{UART}
-serial-port hardware attached to the RISC-V. The console driver accumulates a
-line of input at a time, processing special input characters such as
-backspace and control-u. User processes, such as the shell, use
-the {\tt read} system call to fetch lines of input from the console.
-When you type input to xv6 in QEMU, your keystrokes are delivered to
-xv6 by way of QEMU's simulated UART hardware.
+控制台驱动器 \fileref{kernel/console.c} 是驱动器结构的一个简单示例。控制台驱动器通过连接到 RISC-V 的 \indextext{UART} 串行端口硬件，接收由人类输入的字符。控制台驱动器每次累积一行输入，并处理特殊输入字符，例如退格键和 control-u。用户进程（例如 shell）使用 {\tt read} 系统调用从控制台获取输入行。当您在 QEMU 中向 xv6 输入时，您的按键会通过 QEMU 模拟的 UART 硬件传递给 xv6。
 
-The UART hardware that the driver talks to is a 16550
-chip~\cite{ns16550a} emulated by QEMU. On a real computer, a 16550
-would manage an RS232 serial link connecting to a terminal or other
-computer. When running QEMU, it's connected to your keyboard and
-display.
+驱动器与之交互的 UART 硬件是由 QEMU 模拟的 16550 芯片~\cite{ns16550a}。在真实的计算机上，16550 芯片会管理连接到终端或其他计算机的 RS232 串行链路。在运行 QEMU 时，它连接到您的键盘和显示器。
 
-The UART hardware appears to software as a set of \indextext{memory-mapped}
-control registers. That is, there are some physical addresses that 
-are connected to the UART device, so that loads and stores
-interact with the device hardware rather than RAM.
-The memory-mapped addresses for the UART start at 0x10000000, or {\tt UART0}
-\lineref{kernel/memlayout.h:/UART0.0x/}.
-There are a handful of UART control registers, each the width
-of a byte. Their offsets from {\tt UART0} are defined in
-\lineref{kernel/uart.c:/define.RHR/}. For example, the
-{\tt LSR} register contains bits that indicate whether input
-characters are waiting to be read by the driver. These
-characters (if any) are available for reading from the
-{\tt RHR} register. Each time one is read, the UART hardware
-deletes it from an internal FIFO of waiting characters, and
-clears the ``ready'' bit in {\tt LSR} when the FIFO is empty.
-To transmit, the driver writes a byte to the {\tt THR} register,
-which causes the UART to append the byte to a FIFO of bytes that the
-UART will send on the RS232 serial link.
-The UART transmit and receive hardware are largely independent
-of each other.
+UART 硬件对软件来说表现为一组 \indextext{内存映射} 的控制寄存器。也就是说，存在一些连接到 UART 设备的物理地址，因此对这些地址的读取和存储会与设备硬件交互，而不是与 RAM 交互。UART 的内存映射地址从 0x10000000 开始，即 {\tt UART0} \lineref{kernel/memlayout.h:/UART0.0x/}。有多个 UART 控制寄存器，每个宽度为一个字节。它们相对于 {\tt UART0} 的偏移量在 \lineref{kernel/uart.c:/define.RHR/} 中定义。例如，{\tt LSR} 寄存器包含一些位，指示是否有输入字符正在等待驱动器读取。这些字符（如果有）可以从 {\tt RHR} 寄存器读取。每次读取一个字符后，UART 硬件会将其从等待字符的内部 FIFO 中删除，并在 FIFO 为空时清除 {\tt LSR} 中的“就绪”位。为了发送数据，驱动器向 {\tt THR} 寄存器写入一个字节，这会使 UART 将该字节追加到其将在 RS232 串行链路上发送的字节 FIFO 中。UART 的发送和接收硬件在很大程度上是相互独立的。
 
-Xv6's {\tt main} calls {\tt consoleinit}
-\lineref{kernel/console.c:/^consoleinit/} to initialize the UART
-hardware. This code configures the UART to generate 
-a receive 
-interrupt when the UART receives each byte of input, and
-a \indextext{transmit complete} interrupt each time the
-UART finishes sending a byte of output \lineref{kernel/uart.c:/^uartinit/}.
+Xv6 的 {\tt main} 函数调用 {\tt consoleinit} \lineref{kernel/console.c:/^consoleinit/} 来初始化 UART 硬件。这段代码将 UART 配置为：当 UART 接收到每个输入字节时产生一个接收中断，并且每当 UART 完成发送一个输出字节时产生一个 \indextext{发送完成} 中断 \lineref{kernel/uart.c:/^uartinit/}。
 
-The xv6 shell reads from the console by way of a file descriptor
-opened by {\tt init.c} \lineref{user/init.c:/open..console/}. Calls to
-the {\tt read} system call make their way through the kernel to {\tt
-  consoleread} \lineref{kernel/console.c:/^consoleread/}. {\tt
-  consoleread} waits for input to arrive (via interrupts) and be
-buffered in {\tt cons.buf}, copies the input to user space, and (after
-a whole line has arrived) returns to the user process. If the user
-hasn't typed a full line yet, any reading processes will wait in the
-{\tt sleep} call
-\lineref{kernel/console.c:/sleep..cons/}
-(Chapter~\ref{CH:SLEEP} explains the details of {\tt sleep}).
+xv6 shell 通过 {\tt init.c} \lineref{user/init.c:/open..console/} 打开的一个文件描述符从控制台读取。对 {\tt read} 系统调用的调用会通过内核最终到达 {\tt consoleread} \lineref{kernel/console.c:/^consoleread/}。{\tt consoleread} 等待输入到达（通过中断）并被缓冲在 {\tt cons.buf} 中，然后将输入复制到用户空间，并在接收到完整的一行后返回到用户进程。如果用户还没有输入完整的一行，任何正在读取的进程将在 {\tt sleep} 调用中等待 \lineref{kernel/console.c:/sleep..cons/}（第~\ref{CH:SLEEP}~章解释了 {\tt sleep} 的细节）。
 
-When the user types a character, the UART hardware asks the RISC-V
-to raise an interrupt, which activates
-xv6's trap handler.
-The trap handler calls {\tt devintr}
-\lineref{kernel/trap.c:/^devintr/},
-which looks at the RISC-V {\tt scause} register to discover that
-the interrupt is from an external device.
-Then it asks a hardware unit called the PLIC
-\cite{riscv:priv}
-to tell it which device interrupted
-\lineref{kernel/trap.c:/plic.claim/}.
-If it was the UART, {\tt devintr} calls {\tt uartintr}.
+当用户键入一个字符时，UART 硬件请求 RISC-V 引发一个中断，这会激活 xv6 的陷阱处理程序。陷阱处理程序调用 {\tt devintr} \lineref{kernel/trap.c:/^devintr/}，它查看 RISC-V 的 {\tt scause} 寄存器，发现该中断来自一个外部设备。然后，它询问一个称为 PLIC \cite{riscv:priv} 的硬件单元，以确定是哪个设备引发了中断 \lineref{kernel/trap.c:/plic.claim/}。如果是 UART，{\tt devintr} 会调用 {\tt uartintr}。
 
-{\tt uartintr}
-\lineref{kernel/uart.c:/^uartintr/}
-reads any waiting input characters from the UART hardware
-and hands them to {\tt consoleintr}
-\lineref{kernel/console.c:/^consoleintr/}; it doesn't
-wait for characters, since future input will raise a new interrupt.
-The job of {\tt consoleintr} is to accumulate input characters in
-{\tt cons.buf} 
-until a whole line arrives.
-{\tt consoleintr} treats backspace and a few other characters
-specially.
-When a newline arrives, {\tt consoleintr} wakes up a
-waiting {\tt consoleread} (if there is one).
+{\tt uartintr} \lineref{kernel/uart.c:/^uartintr/}
+从 UART 硬件读取任何等待的输入字符，并将它们交给 {\tt consoleintr} \lineref{kernel/console.c:/^consoleintr/}；它不会等待字符，因为将来的输入会引发新的中断。{\tt consoleintr} 的任务是将输入的字符累积到 {\tt cons.buf} 中，直到收到完整的一行。{\tt consoleintr} 会特殊处理退格键和其他一些字符。当换行符到达时，{\tt consoleintr} 会唤醒一个正在等待的 {\tt consoleread}（如果有的话）。
 
-Once woken, {\tt consoleread} will observe a full line in {\tt
-  cons.buf}, copy it to user space, and return (via the system call
-machinery) to user space.
+一旦被唤醒，{\tt consoleread} 会观察到 {\tt cons.buf} 中有一整行，将其复制到用户空间，然后（通过系统调用机制）返回到用户空间。
 
-\section{Code: Console output}
+\section{代码：控制台输出}
 
-A {\tt write} system call on a file descriptor connected to the console
-eventually arrives at 
-{\tt uartputc}
-\lineref{kernel/uart.c:/^uartputc/}.
-The device driver maintains an output buffer ({\tt uart\_tx\_buf})
-so that writing processes do not have to wait for the UART to finish
-sending; instead, {\tt uartputc} appends each character to the buffer,
-calls {\tt uartstart} to start the device transmitting (if it isn't
-already), and returns. The only situation in which {\tt uartputc}
-waits is if the buffer is already full.
+对连接到控制台的文件描述符执行 {\tt write} 系统调用，最终会到达 {\tt uartputc} \lineref{kernel/uart.c:/^uartputc/}。设备驱动器维护一个输出缓冲区（{\tt uart\_tx\_buf}），这样写进程不必等待 UART 完成发送；相反，{\tt uartputc} 将每个字符追加到缓冲区，调用 {\tt uartstart} 启动设备发送（如果尚未启动），然后返回。{\tt uartputc} 唯一需要等待的情况是缓冲区已满。
 
-Each time the UART finishes sending a byte, it generates an interrupt.
-{\tt uartintr} calls {\tt uartstart}, which checks that the device
-really has finished sending, and hands the device the next buffered
-output character. Thus if a process writes multiple bytes to the
-console, typically the first byte will be sent by {\tt uartputc}'s
-call to {\tt uartstart}, and the remaining buffered bytes will be sent
-by {\tt uartstart} calls from {\tt uartintr} as transmit complete
-interrupts arrive.
+每次 UART 完成发送一个字节时，它会产生一个中断。{\tt uartintr} 调用 {\tt uartstart}，后者检查设备是否确实已完成发送，并将下一个缓冲的输出字符交给设备。因此，如果一个进程向控制台写入多个字节，通常第一个字节将由 {\tt uartputc} 调用的 {\tt uartstart} 发送，而剩余的缓冲字节将在发送完成中断到达时，由 {\tt uartintr} 调用的 {\tt uartstart} 发送。
 
-A general pattern to note is the decoupling of device activity from
-process activity via buffering and interrupts. The console driver can
-process input even when no process is waiting to read it; a subsequent
-read will see the input. Similarly, processes can send output without
-having to wait for the device. This decoupling can increase
-performance by allowing processes to execute concurrently with device
-I/O, and is particularly important when the device is slow (as with
-the UART) or needs immediate attention (as with echoing typed
-characters). This idea is sometimes called \indextext{I/O
-  concurrency}.
+需要注意的一个通用模式是：通过缓冲区和中断将设备活动与进程活动解耦。即使没有进程在等待读取输入，控制台驱动器也可以处理输入；后续的读取将会看到这些输入。类似地，进程可以发送输出而无需等待设备。这种解耦通过允许进程与设备 I/O 并发执行来提高性能，这在设备速度较慢（如 UART）或需要立即关注（如回显键入的字符）时尤其重要。这种思想有时被称为 \indextext{I/O 并发性}。
 
-\section{Concurrency in drivers}
+\section{驱动程序中的并发性}
 
-You may have noticed calls to {\tt acquire} in {\tt consoleread}
-and in {\tt consoleintr}. These calls acquire a lock, which protects
-the console driver's data structures from concurrent access.
-There are three concurrency dangers here: two processes on
-different CPUs might call {\tt consoleread} at the same time;
-the hardware might ask a CPU to deliver a console (really 
-UART) interrupt while that CPU is already executing inside
-{\tt consoleread};
-and the hardware might deliver a console interrupt on
-a different CPU while {\tt consoleread} is executing.
-Chapter~\ref{CH:LOCK} explains how to use locks
-to ensure that these dangers don't lead to incorrect results.
+您可能已经注意到 {\tt consoleread} 和 {\tt consoleintr} 中调用了 {\tt acquire}。这些调用获取一把锁，用于保护控制台驱动程序的数据结构免受并发访问。这里存在三个并发危险：不同 CPU 上的两个进程可能同时调用 {\tt consoleread}；硬件可能在该 CPU 已经执行 {\tt consoleread} 内部代码时，要求该 CPU 传递一个控制台（实际上是 UART）中断；以及硬件可能在另一个 CPU 上执行 {\tt consoleread} 时传递控制台中断。第~\ref{CH:LOCK}~章解释了如何使用锁来确保这些危险不会导致错误结果。
 
-Another way in which concurrency requires care in drivers is that one
-process may be waiting for input from a device, but the interrupt
-signaling arrival of the input may arrive when a different process (or
-no process at all) is running. Thus interrupt handlers are not allowed
-to think about the process or code that they have interrupted. For
-example, an interrupt handler cannot safely call {\tt copyout} with
-the current process's page table. Interrupt handlers typically do
-relatively little work (e.g., just copy the input data to a buffer),
-and wake up top-half code to do the rest.
+并发在驱动程序中需要小心的另一种方式是：一个进程可能正在等待来自设备的输入，但指示输入到达的中断可能发生在另一个不同的进程（或根本没有进程）正在运行时。因此，中断处理程序不允许考虑它们所中断的进程或代码。例如，一个中断处理程序不能安全地使用当前进程的页表来调用 {\tt copyout}。中断处理程序通常只做相对较少的工作（例如，仅将输入数据复制到一个缓冲区），并唤醒顶半部代码来完成其余工作。
 
-\section{Timer interrupts}
+\section{定时器中断}
 
-Xv6 uses timer interrupts to maintain its idea of the
-current time and to switch among compute-bound processes. Timer
-interrupts come from clock hardware attached to each RISC-V CPU. Xv6
-programs each CPU's clock hardware to interrupt the CPU periodically.
+Xv6 使用定时器中断来维护其对当前时间的认知，并在计算密集型进程之间进行切换。定时器中断来自连接到每个 RISC-V CPU 的时钟硬件。Xv6 对每个 CPU 的时钟硬件进行编程，使其周期性地中断该 CPU。
 
-Code in {\tt start.c} 
-\lineref{kernel/start.c:/^timerinit/} sets some control bits
-that allow supervisor-mode access to the timer control
-registers, and then asks for the first timer interrupt.
-The {\tt time} control register contains a count that the
-hardware increments at a steady rate; this serves as a
-notion of the current time. The {\tt stimecmp} register
-contains a time at which the the CPU will raise a timer
-interrupt; setting {\tt stimecmp} to the current value
-of {\tt time} plus {\it x} will schedule an interrupt
-{\it x} time units in the future. For {\tt qemu}'s RISC-V
-emulation, 1000000 time units is roughly a tenth of second.
+{\tt start.c} \lineref{kernel/start.c:/^timerinit/} 中的代码设置了一些控制位，允许管理员模式访问定时器控制寄存器，然后请求第一次定时器中断。{\tt time} 控制寄存器包含一个由硬件以稳定速率递增的计数；这用作当前时间的概念。{\tt stimecmp} 寄存器包含一个时间点，届时 CPU 将引发一个定时器中断；将 {\tt stimecmp} 设置为 {\tt time} 的当前值加上 {\it x}，将在未来 {\it x} 个时间单位后安排一个中断。对于 {\tt qemu} 的 RISC-V 模拟，1,000,000 个时间单位大约是十分之一秒。
 
-Timer interrupts arrive via {\tt usertrap} or {\tt kerneltrap}
-and {\tt devintr}, like other device interrupts.
-Timer interrupts arrive with {\tt scause}'s low bits set to
-five; {\tt devintr} in {\tt trap.c} detects this situation
-and calls {\tt clockintr}
-\lineref{kernel/trap.c:/clockintr/}.
-The latter function increments {\tt ticks},
-allowing the kernel to track the
-passage of time. The increment occurs on only one CPU, to avoid time
-passing faster if there are multiple CPUs.
-{\tt clockintr} wakes up any processes waiting in the {\tt pause}
-system call,
-and schedules the next timer interrupt by writing
-{\tt stimecmp}.
+定时器中断像其他设备中断一样，通过 {\tt usertrap} 或 {\tt kerneltrap} 以及 {\tt devintr} 到达。定时器中断到达时，{\tt scause} 的低位设置为 5；{\tt trap.c} 中的 {\tt devintr} 会检测到这种情况并调用 {\tt clockintr} \lineref{kernel/trap.c:/clockintr/}。后者函数递增 {\tt ticks}，允许内核跟踪时间的流逝。为了避免在有多个 CPU 时时间过得更快，该递增只在一个 CPU 上进行。{\tt clockintr} 会唤醒任何在 {\tt pause} 系统调用中等待的进程，并通过写入 {\tt stimecmp} 来安排下一次定时器中断。
 
-{\tt devintr} returns 2 for a timer interrupt
-in order to indicate to {\tt kerneltrap}
-or {\tt usertrap} that they should call {\tt yield} so that
-CPUs can be multiplexed among runnable processes.
+对于定时器中断，{\tt devintr} 返回 2，以向 {\tt kerneltrap} 或 {\tt usertrap} 表明它们应该调用 {\tt yield}，以便 CPU 可以在可运行的进程之间进行多路复用。
 
-The fact that kernel code can be interrupted by a timer interrupt that
-forces a context switch via {\tt yield} is part of the reason why
-early code in {\tt usertrap} is careful to save state such as {\tt
-  sepc} before enabling interrupts. These context switches also mean
-that kernel code must be written in the knowledge that it may move
-from one CPU to another without warning.
+内核代码可能被定时器中断打断，并通过 {\tt yield} 强制进行上下文切换，这一事实是 {\tt usertrap} 中的早期代码在启用中断之前小心保存状态（例如 {\tt sepc}）的部分原因。这些上下文切换也意味着内核代码在编写时必须认识到，它可能在没有预警的情况下从一个 CPU 移动到另一个 CPU。
 
-\section{Real world}
+\section{现实世界}
 
-Xv6, like many operating systems, allows interrupts and even context
-switches (via {\tt yield}) while executing in the kernel. The reason
-for this is to retain quick response times during complex system calls
-that run for a long time. However, as noted above, allowing interrupts
-in the kernel is the source of some complexity; as a result, a few
-operating systems allow interrupts only while executing user code.
+与许多操作系统一样，Xv6 允许在内核执行期间发生中断甚至上下文切换（通过 {\tt yield}）。这样做的目的是在长时间运行的复杂系统调用期间保持快速的响应时间。然而，如上所述，在内核中允许中断是一些复杂性的根源；因此，少数操作系统只允许在执行用户代码时发生中断。
 
-Supporting all the devices on a typical computer in its full glory is
-much work, because there are many devices, the devices have many
-features, and the protocol between device and driver can be complex
-and poorly documented. In many operating systems, the drivers account
-for more code than the core kernel.
+在典型计算机上全面支持所有设备是一项繁重的工作，因为设备众多，功能繁多，并且设备与驱动器之间的协议可能复杂且文档不全。在许多操作系统中，驱动程序占用的代码比内核核心还要多。
 
-The UART driver retrieves data a byte at a time by reading the UART
-control registers; this pattern is called \indextext{programmed I/O}, since
-software is driving the data movement. Programmed I/O is simple, but
-too slow to be used at high data rates. Devices that need to move lots
-of data at high speed typically use \indextext{direct memory access (DMA)}.
-DMA device hardware directly writes incoming data to RAM, and reads
-outgoing data from RAM. Modern disk and network devices use DMA. A
-driver for a DMA device would prepare data in RAM, and then use a
-single write to a control register to tell the device to process the
-prepared data.
+UART 驱动器通过读取 UART 控制寄存器来逐字节检索数据；这种模式称为 \indextext{程序化 I/O}，因为软件在驱动数据移动。程序化 I/O 很简单，但速度太慢，无法用于高数据速率。需要高速移动大量数据的设备通常使用 \indextext{直接内存访问 (DMA)}。DMA 设备硬件直接将传入数据写入 RAM，并从 RAM 读取传出数据。现代磁盘和网络设备使用 DMA。DMA 设备的驱动器会在 RAM 中准备好数据，然后通过一次对控制寄存器的写入来告诉设备处理已准备好的数据。
 
-Interrupts make sense when a device needs attention at unpredictable
-times, and not too often. But interrupts have high CPU overhead. Thus
-high speed devices, such as network and disk controllers, use tricks
-that reduce the need for interrupts. One trick is to raise a single
-interrupt for a whole batch of incoming or outgoing requests. Another
-trick is for the driver to disable interrupts entirely, and to check
-the device periodically to see if it needs attention. This technique
-is called \indextext{polling}. Polling makes sense if the device performs
-operations at a high rate, but it wastes CPU time if the device is mostly
-idle. Some drivers dynamically switch between polling and interrupts
-depending on the current device load.
+当设备在不可预测的时间需要关注，并且频率不是太高时，中断是有意义的。但是中断的 CPU 开销很高。因此，高速设备（如网络和磁盘控制器）会使用一些技巧来减少对中断的需求。一种技巧是为整批传入或传出的请求只引发一个中断。另一种技巧是驱动器完全禁用中断，并定期检查设备是否需要关注。这种技术称为 \indextext{轮询}。如果设备以高频率执行操作，轮询是有意义的，但如果设备大部分时间空闲，则会浪费 CPU 时间。一些驱动器会根据当前的设备负载在轮询和中断之间动态切换。
 
-The UART driver copies incoming data first to a buffer in the kernel,
-and then to user space. This makes sense at low data rates, but such a
-double copy can significantly reduce performance for devices that
-generate or consume data very quickly. Some operating systems are able
-to directly move data between user-space buffers and device hardware,
-often with DMA.
+UART 驱动器首先将传入数据复制到内核的缓冲区，然后再复制到用户空间。这在低数据速率下是合理的，但对于那些非常快速地生成或消耗数据的设备来说，这种双重复制会显著降低性能。一些操作系统能够直接在用户空间缓冲区和设备硬件之间移动数据，通常使用 DMA。
 
-As mentioned in Chapter~\ref{CH:UNIX}, the console appears to
-applications as a regular file, and applications read input and write
-output using the \lstinline{read} and \lstinline{write} system calls.
-Applications may want to control aspects of a device that cannot be
-expressed through the standard file system calls (e.g.,
-enabling/disabling line buffering in the console driver).  Unix
-operating systems provide an \lstinline{ioctl} system call for such
-cases.
+如第~\ref{CH:UNIX}~章所述，控制台对应用程序来说就像一个普通文件，应用程序使用 \lstinline{read} 和 \lstinline{write} 系统调用来读取输入和写入输出。应用程序可能希望控制设备那些无法通过标准文件系统调用表达的方面（例如，启用/禁用控制台驱动器中的行缓冲）。Unix 操作系统为此类情况提供了一个 \lstinline{ioctl} 系统调用。
 
-Some uses of computers require ``real-time'' responses to external
-events: responses guaranteed to occur within a bounded time. For
-example, in safety-critical systems missing a deadline can lead to
-disasters. Xv6 is not suitable for real-time settings. Among other
-things, xv6's scheduler does not take into account real-time deadlines
-when it decides what process to run next, and xv6 has long kernel code
-paths with interrupts disabled, so that it may not respond to
-interrupts quickly. A real-time operating system must not only fix
-these problems, but also be structured in a way that allows analysis
-of worst-case response times.
+有些计算机的使用需要对事件做出“实时”响应：保证在有限时间内做出响应。例如，在安全关键型系统中，错过截止时间可能导致灾难。Xv6 不适用于实时环境。除其他问题外，xv6 的调度器在决定接下来运行哪个进程时不考虑实时截止时间，并且 xv6 存在禁用中断的长内核代码路径，因此它可能无法快速响应中断。实时操作系统不仅必须解决这些问题，还必须以能够分析最坏情况响应时间的方式进行构建。
 
-\section{Exercises}
+\section{练习}
 
 \begin{enumerate}
 
-\item Modify {\tt uart.c} to not use interrupts at all. You may need
-to modify {\tt console.c} as well.
+\item 修改 {\tt uart.c} 使其完全不使用中断。您可能也需要修改 {\tt console.c}。
 
-\item Add a driver for an Ethernet card.
+\item 为一个以太网卡添加驱动程序。
 
 \end{enumerate}

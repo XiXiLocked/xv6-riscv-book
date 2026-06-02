@@ -1,199 +1,122 @@
-\chapter{Operating system interfaces}
+\chapter{操作系统接口}
 \label{CH:UNIX}
 
-The job of an operating system is to share a computer among
-multiple programs and to provide a more useful set of services
-than the hardware alone supports.
-An operating system manages and abstracts
-the low-level hardware, so that, for example,
-a word processor need not concern itself with which type
-of disk hardware is being used.
-An operating system shares the hardware among multiple programs so
-that they run (or appear to run) at the same time.
-Finally, operating systems provide controlled ways for programs
-to interact, so that they can share data or work together.
+操作系统的职责是在多个程序之间共享一台计算机，并提供比硬件本身所支持的更有用的服务集。
+操作系统对底层硬件进行管理和抽象，这样一来，例如，一个字处理器就无需关心具体使用的是哪种类型的磁盘硬件。
+操作系统在多个程序之间共享硬件，使得它们可以（或看起来可以）同时运行。
+最后，操作系统还为程序之间的交互提供了受控的方式，以便它们可以共享数据或协同工作。
 
-An operating system provides services to user programs through an interface.
-\index{interface design}
-Designing a good interface turns out to be
-difficult.  On the one hand, we would like the interface to be
-simple and narrow because that makes it easier to get the
-implementation right.  On the other hand,
-we may be tempted to offer many sophisticated features to applications.
-The trick in
-resolving this tension is to design interfaces that rely on a few
-mechanisms that can be combined to provide much generality.
+操作系统通过一个接口向用户程序提供服务。
+\index{接口设计}
+设计一个好的接口被证明是困难的。 一方面，我们希望接口简单且狭窄，因为这使得正确实现它变得更容易。 另一方面，我们又可能倾向于为应用程序提供许多复杂的功能。
+解决这种矛盾的关键在于设计出依赖少数几种机制、并通过组合这些机制来提供高度通用性的接口。
 
-This book uses a single operating system as a concrete example to
-illustrate operating system concepts.  That operating system,
-xv6, provides the basic interfaces introduced by Ken Thompson and
-Dennis Ritchie's Unix operating system~\cite{unix}, as well as mimicking Unix's
-internal design.  Unix provides a
-narrow interface whose mechanisms combine well, offering a surprising
-degree of generality.  This interface has been so successful that
-modern operating systems—BSD, Linux, macOS, Solaris, and even, to a
-lesser extent, Microsoft Windows—have Unix-like interfaces.
-Understanding xv6 is a good start toward understanding any of these
-systems and many others.
+本书以一个具体的操作系统作为实例来说明操作系统的概念。 这个操作系统，xv6，提供了由 Ken Thompson 和 Dennis Ritchie 的 Unix 操作系统~\cite{unix} 引入的基本接口，并且模拟了 Unix 的内部设计。 Unix 提供了一个狭窄的接口，其机制能够很好地组合，展现出惊人的通用性。 这个接口非常成功，以至于现代操作系统——BSD、Linux、macOS、Solaris，甚至在较小程度上包括 Microsoft Windows——都提供了类似 Unix 的接口。 理解 xv6 是理解这些系统以及许多其他系统的一个良好起点。
 
-As 
-Figure~\ref{fig:os} shows,
-xv6 takes the traditional form of a
-\indextext{kernel},
-a special program that provides
-services to running programs.
-Each running program, called a
-\indextext{process},
-has memory containing instructions, data, and a stack. The
-instructions implement the
-program's computation.  The data are the variables on which
-the computation acts. The stack organizes the program's procedure calls.
-A given computer typically has many processes but only a single
-kernel.
+如图 \ref{fig:os} 所示，xv6 采用了传统的
+\indextext{内核}
+形式，内核是一个特殊的程序，为正在运行的程序提供服务。
+每个正在运行的程序，称为
+\indextext{进程}，
+拥有包含指令、数据和一个栈的内存。 指令实现了程序的运算。 数据是运算所操作的变量。 栈则用于组织程序的函数调用。 一台给定的计算机通常有许多进程，但只有一个内核。
 
-When a
-process needs to invoke a kernel service, it invokes 
-a \indextext{system call},
-one of the calls
-in the operating system's interface.
-The system call enters the kernel;
-the kernel performs the service and returns.
-Thus a process alternates between executing in
-\indextext{user space}
-and
-\indextext{kernel space}.
+当一个
+进程需要调用内核服务时，它会发起一个
+\indextext{系统调用}，
+这是操作系统接口中的一个调用。
+系统调用会进入内核；
+内核执行服务并返回。
+因此，一个进程会在
+\indextext{用户空间}
+和
+\indextext{内核空间}
+中交替执行。
 
-As described in detail in subsequent chapters, the kernel uses the hardware protection mechanisms provided by a
-CPU\footnote{
-This text generally refers to the hardware element that executes a
-computation with the term \indextext{CPU}, an acronym for central
-processing unit.  Other documentation (e.g., the RISC-V specification)
-also uses the words processor, core, and hart instead of CPU.
+正如后续章节所详述的，内核利用 CPU\footnote{
+本文通常使用术语 \indextext{CPU}（中央处理单元的缩写）来指代执行计算的硬件元素。 其他文档（例如 RISC-V 规范）也可能使用处理器（processor）、核心（core）或硬件线程（hart）来代替 CPU。
 }
-to
-ensure that each process executing in user space can access only
-its own memory.
-The kernel executes with the hardware privileges required to
-implement these protections; user programs execute without
-those privileges.
-When a user program invokes a system call, the hardware
-raises the privilege level and starts executing a pre-arranged
-function in the kernel.
+提供的硬件保护机制来确保每个在用户空间执行的进程只能访问其自身的内存。
+内核在实现这些保护所需的硬件特权级别下执行；用户程序则在没有这些特权的情况下执行。
+当用户程序调用系统调用时，硬件会提升特权级别，并开始执行内核中预先安排好的函数。
 
 \begin{figure}[t]
 \center
 \includegraphics[scale=0.5]{fig/os.pdf}
-\caption{A kernel and two user processes.}
+\caption{一个内核和两个用户进程。}
 \label{fig:os}
 \end{figure}
 
-The collection of system calls that a kernel provides
-is the interface that user programs see.
-The xv6 kernel provides a subset of the services and system calls
-that Unix kernels traditionally offer.  
-Figure~\ref{fig:api} 
-lists all of xv6's system calls.
+内核提供的系统调用集合就是用户程序所看到的接口。
+xv6 内核提供了传统 Unix 内核通常提供的服务和系统调用的一个子集。
+图 \ref{fig:api} 列出了 xv6 的所有系统调用。
 
-The rest of this chapter outlines xv6's services---processes, memory,
-file descriptors, pipes, and a file system---and illustrates them with
-code snippets and discussions of how the \indextext{shell}, 
-Unix's command-line user interface, uses
-them. The shell's use of system calls illustrates how carefully they
-have been designed.
+本章的剩余部分将概述 xv6 的服务——进程、内存、文件描述符、管道和文件系统——并通过代码片段以及讨论 \indextext{shell}（Unix 的命令行用户界面）如何使用它们来说明这些服务。 Shell 对系统调用的使用展示了它们是如何经过精心设计的。
 
-The shell is an ordinary program that reads commands from the user
-and executes them.
-The fact that the shell is a user program, and not part of the kernel,
-illustrates the power of the system call interface: there is nothing
-special about the shell.
-It also means that the shell is easy to replace; as a result,
-modern Unix systems have a variety of
-shells to choose from, each with its own user interface
-and scripting features.
-The xv6 shell is a simple implementation of the essence of
-the Unix Bourne shell.
+Shell 是一个普通的程序，它从用户那里读取命令并执行它们。
+Shell 是一个用户程序而不是内核的一部分，这一事实说明了系统调用接口的强大之处：Shell 并没有什么特别之处。
+这也意味着 Shell 很容易被替换；因此，现代 Unix 系统有多种 Shell 可供选择，每种都有其自己的用户界面和脚本功能。
+xv6 的 shell 是对 Unix Bourne shell 本质的一个简单实现。
 
-The implementation of the xv6 shell can be found at
-\fileref{user/sh.c}. (\textcolor{blue}{The link} is a hyperlink to
-the relevant xv6 source code at
-\url{https://github.com/mit-pdos/xv6-riscv/} and the specific number
-refers to the sheet and line number in
-\href{xv6-src-booklet.pdf}{xv6-src-booklet.pdf}, as in the Lions'
-Commentary on UNIX 6th Edition~\cite{lions}. A good practice is to try
-to read the source code first on your own (in your favorite
-development environment, on github, or in a PDF viewer) and then come
-back to this book.  By the end of this book you should be able to
-understand every line of xv6 source code without having to consult this
-book.
-
+xv6 shell 的实现可以在 \fileref{user/sh.c} 找到。 （蓝色链接是跳转到相关 xv6 源代码的超链接，地址为 \url{https://github.com/mit-pdos/xv6-riscv/}，具体编号指的是 \href{xv6-src-booklet.pdf}{xv6-src-booklet.pdf} 中的页和行号，如同 Lions 对 UNIX 第 6 版的注释~\cite{lions} 一样。一个好的实践是尝试先在您喜欢的开发环境、github 或 PDF 阅读器中阅读源代码，然后再回到本书。在读完本书时，您应该能够在不查阅本书的情况下理解 xv6 的每一行源代码。）
 
 %% 
 %% 	Processes and memory
 %% 
-\section{Processes and memory}
+\section{进程和内存}
 
-An xv6 process consists of user-space memory (instructions, data, and stack)
-and per-process state private to the kernel.
+一个 xv6 进程包含用户空间内存（指令、数据和栈）以及内核私有的每个进程的状态。
 Xv6 
-\indextext{time-share}s
-processes: it transparently switches the available CPUs
-among the set of processes waiting to execute.
-When a process is not executing, xv6 saves the process's CPU registers,
-restoring them when it next runs the process.
-The kernel associates a process identifier, or
-\indexcode{PID},
-with each process.
+\indextext{分时共享}
+进程：它透明地在等待执行的一组进程之间切换可用的 CPU。
+当一个进程没有在执行时，xv6 会保存该进程的 CPU 寄存器，并在下次运行该进程时恢复它们。
+内核为每个进程关联了一个进程标识符，或称
+\indexcode{PID}。
 
 \begin{figure}[t]
 \center
 \begin{tabular}{ll}
-{\bf System call} & {\bf Description} \\
+{\bf 系统调用} & {\bf 描述} \\
 \midrule
-int fork() & Create a process, return child's PID. \\
-int exit(int status) & Terminate the current process; status reported to wait(). No return. \\
-int wait(int *status) & Wait for a child to exit; exit status in *status; returns child PID. \\
-int kill(int pid) & Terminate process PID. Returns 0, or -1 for error. \\
-int getpid() & Return the current process's PID. \\
-int pause(int n) & Pause for n clock ticks. \\
-int exec(char *file, char *argv[]) & Load a file and execute it with arguments; only returns if error. \\
-char *sbrk(int n) & Grow process's memory by n zero bytes. Returns start of new memory. \\
-int open(char *file, int flags) & Open a file; flags indicate read/write; returns an fd (file descriptor). \\
-int write(int fd, char *buf, int n) & Write n bytes from buf to file descriptor fd; returns n. \\
-int read(int fd, char *buf, int n) & Read n bytes into buf; returns number read; or 0 if end of file. \\
-int close(int fd) & Release open file fd. \\
-int dup(int fd) & Return a new file descriptor referring to the same file as fd.\\
-int pipe(int p[]) & Create a pipe, put read/write file descriptors in p[0] and p[1]. \\
-int chdir(char *dir) & Change the current directory. \\
-int mkdir(char *dir) & Create a new directory. \\
-int mknod(char *file, int, int) & Create a device file. \\
-int fstat(int fd, struct stat *st) & Place info about an open file into *st. \\
-int link(char *file1, char *file2) & Create another name (file2) for the file file1. \\
-int unlink(char *file) & Remove a file. \\
+int fork() & 创建一个进程，返回子进程的 PID。 \\
+int exit(int status) & 终止当前进程；status 报告给 wait()。不返回。 \\
+int wait(int *status) & 等待一个子进程退出；退出状态存放在 *status；返回子进程 PID。 \\
+int kill(int pid) & 终止 PID 为 pid 的进程。成功返回 0，错误返回 -1。 \\
+int getpid() & 返回当前进程的 PID。 \\
+int pause(int n) & 暂停 n 个时钟滴答。 \\
+int exec(char *file, char *argv[]) & 加载一个文件并用参数执行它；仅在出错时返回。 \\
+char *sbrk(int n) & 将进程的内存增加 n 个零字节。返回新内存的起始地址。 \\
+int open(char *file, int flags) & 打开一个文件；flags 指示读/写；返回一个 fd（文件描述符）。 \\
+int write(int fd, char *buf, int n) & 从 buf 向文件描述符 fd 写入 n 个字节；返回 n。 \\
+int read(int fd, char *buf, int n) & 读取 n 个字节到 buf；返回读取的字节数；文件结束时返回 0。 \\
+int close(int fd) & 释放已打开的文件 fd。 \\
+int dup(int fd) & 返回一个新的文件描述符，该描述符指向与 fd 相同的文件。\\
+int pipe(int p[]) & 创建一个管道，将读文件描述符和写文件描述符放入 p[0] 和 p[1]。 \\
+int chdir(char *dir) & 更改当前目录。 \\
+int mkdir(char *dir) & 创建一个新目录。 \\
+int mknod(char *file, int, int) & 创建一个设备文件。 \\
+int fstat(int fd, struct stat *st) & 将打开文件的信息放入 *st。 \\
+int link(char *file1, char *file2) & 为文件 file1 创建另一个名字（file2）。 \\
+int unlink(char *file) & 移除一个文件。 \\
 \end{tabular}
-\caption{Xv6 system calls. If not otherwise stated, these calls return
-0 for no error, and -1 if there's an error.}
+\caption{Xv6 系统调用。除非另有说明，这些调用成功返回 0，出错返回 -1。}
 \label{fig:api}
 \end{figure}
 
-A process may create a new process using the
+一个进程可以使用
 \indexcode{fork}
-system call.
+系统调用来创建一个新进程。
 \lstinline{fork}
-gives the new process an exact copy of the calling
-process's memory: \lstinline{fork} copies the instructions, data, and
-stack of the calling process into the new process's memory.
+为新进程提供调用进程内存的一个精确副本：\lstinline{fork} 将调用进程的指令、数据和栈复制到新进程的内存中。
 \lstinline{fork}
-returns in both the original and new processes.
-In the original process, \lstinline{fork} returns the new process's
-PID.
-In the new process, \lstinline{fork} returns zero.
-The original and new processes are often called the
-\indextext{parent}
-and
-\indextext{child}.
+在原始进程和新进程中都会返回。
+在原始进程中，\lstinline{fork} 返回新进程的 PID。
+在新进程中，\lstinline{fork} 返回零。
+原始进程和新进程通常被称为
+\indextext{父进程}
+和
+\indextext{子进程}。
 
-For example, consider the following program fragment written in the C
-programming language~\cite{kernighan}:
+例如，考虑下面这个用 C 编程语言~\cite{kernighan} 编写的程序片段：
 \begin{lstlisting}[]
 int pid = fork();
 if(pid > 0){
@@ -207,75 +130,55 @@ if(pid > 0){
   printf("fork error\n");
 }
 \end{lstlisting}
-The
 \indexcode{exit}
-system call causes the calling process to stop executing and
-to release resources such as memory and open files.
-Exit takes an integer status argument,
-conventionally 0 to indicate success and 1 to indicate failure.
-The
+系统调用导致调用进程停止执行并释放资源，如内存和打开的文件。
+Exit 接受一个整数状态参数，按约定 0 表示成功，1 表示失败。
 \indexcode{wait}
-system call returns the PID of an exited (or killed) child of the
-current process and copies the exit status of the child to the address
-passed to wait; if none of the caller's children
-has exited,
+系统调用返回当前进程的一个已退出（或被杀死）的子进程的 PID，并将子进程的退出状态复制到传递给 wait 的地址；如果调用者的子进程都没有退出，
 \indexcode{wait}
-waits for one to do so.
-If the caller has no children, \lstinline{wait} immediately
-returns -1.
-If the parent doesn't care about the exit status of a child, it can
-pass a 0 address to
-\lstinline{wait}.
+会等待其中一个退出。
+如果调用者没有子进程，\lstinline{wait} 立即返回 -1。
+如果父进程不关心子进程的退出状态，它可以向
+\lstinline{wait}
+传递一个零地址。
 
-In the example, the output lines
+在示例中，输出行
 \begin{lstlisting}[]
 parent: child=1234
 child: exiting
 \end{lstlisting}
-might come out in either order (or even intermixed), depending on whether the
-parent or child gets to its
+可能以任意顺序出现（甚至交错出现），具体取决于父进程还是子进程首先执行其
 \indexcode{printf}
-call first.
-After the child exits, the parent's
+调用。
+在子进程退出后，父进程的
 \indexcode{wait}
-returns, causing the parent to print
+返回，导致父进程打印
 \begin{lstlisting}[]
 parent: child 1234 is done
 \end{lstlisting}
-Although the child starts with a copy of the parent's memory, the
-parent and child execute with separate memory and separate registers:
-changing a variable in one does not affect the other. For example, when the
-return value of
+尽管子进程开始时拥有父进程内存的副本，但父进程和子进程使用各自独立的内存和寄存器：在一个进程中改变变量不会影响另一个进程。例如，当
 \lstinline{wait}
-is stored into
-\lstinline{pid} 
-in the parent process,
-it doesn't change the variable 
+的返回值被存入父进程的
 \lstinline{pid}
-in the child.  The value of
+变量时，它不会改变子进程中的
 \lstinline{pid}
-in the child will still be zero.
+变量。子进程中的
+\lstinline{pid}
+值仍将为零。
 
-The
 \indexcode{exec}
-system call
-replaces the calling process's memory with a new memory
-image loaded from a file stored in the file system.
-The file must have a particular format, which specifies which part of
-the file holds instructions, which part is data, at which instruction
-to start, etc. Xv6
-uses the ELF format, which Chapter~\ref{CH:MEM} discusses in
-more detail.
-Usually the file is the result of compiling a program's source code.
-When
+系统调用
+用从文件系统中存储的文件加载而来的新内存映像替换调用进程的内存。
+该文件必须具有特定的格式，该格式规定了文件的哪部分包含指令、哪部分是数据、从哪条指令开始执行等。Xv6
+使用 ELF 格式，第 \ref{CH:MEM} 章将对此进行更详细的讨论。
+通常该文件是编译程序源代码的结果。
+当
 \indexcode{exec}
-succeeds, it does not return to the calling program;
-instead, the instructions loaded from the file start
-executing at the entry point declared in the ELF header.
+成功时，它不会返回到调用程序；
+相反，从文件加载的指令会从 ELF 头中声明的入口点开始执行。
 \lstinline{exec}
-takes two arguments: the name of the file containing the
-executable and an array of string arguments.
-For example:
+接受两个参数：包含可执行文件的文件名和一个字符串参数数组。
+例如：
 \begin{lstlisting}[]
 char *argv[3];
 
@@ -285,177 +188,153 @@ argv[2] = 0;
 exec("/bin/echo", argv);
 printf("exec error\n");
 \end{lstlisting}
-This fragment replaces the calling program with an instance
-of the program 
+这个片段用运行中的程序
 \lstinline{/bin/echo}
-running with the argument list
+的一个实例来替换调用程序，并使用参数列表
 \lstinline{echo}
-\lstinline{hello}.
-Most programs ignore the first element of the argument array, which is 
-conventionally the name of the program.
+\lstinline{hello} 运行它。
+大多数程序忽略参数数组的第一个元素，按照惯例该元素是程序的名称。
 
-The xv6 shell uses the above calls to run programs on behalf of
-users. The main structure of the shell is simple; see
+xv6 shell 代表用户使用上述调用来运行程序。Shell 的主要结构很简单；参见
 \lstinline{main} 
-\lineref{user/sh.c:/main/}.
-The main loop reads a line of input from the user with
-\indexcode{getcmd}.
-Then it calls 
-\lstinline{fork}, 
-which creates a copy of the shell process. The
-parent calls
-\lstinline{wait},
-while the child runs the command.  For example, if the user
-had typed
-``\lstinline{echo hello}''
-to the shell,
+\lineref{user/sh.c:/main/}。
+主循环通过
+\indexcode{getcmd}
+从用户读取一行输入。
+然后它调用 
+\lstinline{fork}， 
+这会创建 shell 进程的一个副本。父进程调用
+\lstinline{wait}，
+而子进程则运行命令。例如，如果用户在 shell 中输入了
+“\lstinline{echo hello}”，
 \lstinline{runcmd}
-would have been called with
-``\lstinline{echo hello}''
-as the argument.
+将以
+“\lstinline{echo hello}”
+作为参数被调用。
 \lstinline{runcmd} 
 \lineref{user/sh.c:/runcmd/}
-runs the actual command. For
-``\lstinline{echo hello}'',
-it would call
+运行实际的命令。对于
+“\lstinline{echo hello}”，
+它会调用
 \lstinline{exec} 
-\lineref{user/sh.c:/exec.ecmd/}.
-If
+\lineref{user/sh.c:/exec.ecmd/}。
+如果
 \lstinline{exec}
-succeeds then the child will execute instructions from
+成功，那么子进程将执行来自
 \lstinline{echo}
-instead of
-\lstinline{runcmd}.  
-At some point
+的指令，而不是来自
+\lstinline{runcmd}
+的指令。
+在某个时刻，
 \lstinline{echo}
-will call
-\lstinline{exit},
-which will cause the parent to return from
-\lstinline{wait}
-in 
+会调用
+\lstinline{exit}，
+这将导致父进程在
 \lstinline{main}
-\lineref{user/sh.c:/main/}.
+函数中的
+\lstinline{wait}
+调用处返回
+\lineref{user/sh.c:/main/}。
 
-You might wonder why
+您可能会好奇为什么
 \indexcode{fork}
-and
+和
 \indexcode{exec}
-are not combined in a single call; we will see later that 
-the shell exploits the separation in its implementation of
-I/O redirection.
-To avoid the wastefulness of
-creating a duplicate process and then immediately replacing it (with \lstinline{exec}),
-operating kernels optimize the implementation of
+不合并成一个单独的调用；我们稍后会看到
+shell 在其 I/O 重定向的实现中利用了这种分离。
+为了避免创建一个重复进程然后立即替换它（使用 \lstinline{exec}）所造成的浪费，
+操作系统内核通过使用诸如写时复制（参见第 \ref{CH:PGFAULTS} 节）之类的虚拟内存技术，针对这种用例优化了
 \lstinline{fork}
-for this use case by using virtual memory techniques such as
-copy-on-write (see Section~\ref{CH:PGFAULTS}).
+的实现。
 
-Xv6 allocates most user-space memory
-implicitly:
+Xv6 隐式地分配了大部分用户空间内存：
 \indexcode{fork}
-allocates the memory required for the child's copy of the
-parent's memory, and 
+分配了子进程复制父进程内存所需的内存，而
 \indexcode{exec}
-allocates enough memory to hold the executable file.
-A process that needs more memory at run-time (perhaps for
-\indexcode{malloc})
-can call
+分配了足够容纳可执行文件的内存。
+一个在运行时需要更多内存（例如，为了
+\indexcode{malloc}）的进程
+可以调用
 \lstinline{sbrk(n)}
-to grow its data memory by
-\lstinline{n} zero
-bytes;
+将其数据内存增加
+\lstinline{n}
+个零字节；
 \indexcode{sbrk}
-returns the location of the new memory.
+返回新内存的位置。
 
 %% 
 %% 	I/O and File descriptors
 %% 
-\section{I/O and File descriptors}
+\section{I/O 和文件描述符}
 
-A 
-\indextext{file descriptor} 
-is a small integer representing a kernel-managed object
-that a process may read from or write to.
-A process may obtain a file descriptor by opening a file, directory,
-or device, or by creating a pipe, or by duplicating an existing
-descriptor.
-For simplicity we'll often refer to the object a file descriptor
-refers to as a ``file'';
-the file descriptor interface abstracts away the differences between
-files, pipes, and devices, making them all look like streams of bytes.
-We'll refer to input and output as \indextext{I/O}.
+一个
+\indextext{文件描述符} 
+是一个小整数，代表一个由内核管理的、进程可以从中读取或向其中写入的对象。
+一个进程可以通过打开一个文件、目录或设备，或者通过创建一个管道，或者通过复制一个现有的描述符来获得一个文件描述符。
+为简单起见，我们通常将文件描述符所指的对象称为“文件”；
+文件描述符接口抽象了文件、管道和设备之间的差异，使它们都看起来像字节流。
+我们将输入和输出称为 \indextext{I/O}。
 
-Internally, the xv6 kernel uses the file descriptor
-as an index into a per-process table,
-so that every process has a private space of file descriptors
-starting at zero.
-By convention, a process reads from file descriptor 0 (standard input),
-writes output to file descriptor 1 (standard output), and
-writes error messages to file descriptor 2 (standard error).
-As we will see, the shell exploits the convention to implement I/O redirection
-and pipelines. The shell ensures that it always has three file descriptors
-open
-\lineref{user/sh.c:/open..console/},
-which are by default file descriptors for the console.
+在内部，xv6 内核将文件描述符用作进程私有表的一个索引，因此每个进程都有一个从零开始的私有文件描述符空间。
+按照惯例，进程从文件描述符 0（标准输入）读取，向文件描述符 1（标准输出）写入，并向文件描述符 2（标准错误）写入错误消息。
+正如我们将看到的，shell 利用这一约定来实现 I/O 重定向和管道。Shell 确保它总是打开三个文件描述符
+\lineref{user/sh.c:/open..console/}，
+默认情况下，这些是控制台的文件描述符。
 
-The
 \lstinline{read}
-and
+和
 \lstinline{write}
-system calls read bytes from and write bytes to
-open files named by file descriptors.
-The call
+系统调用从由文件描述符指定的已打开文件中读取字节和向其中写入字节。
+调用
 \lstinline{read(fd},
 \lstinline{buf},
 \lstinline{n)}
-reads at most
+从文件描述符
+\lstinline{fd}
+读取最多
 \lstinline{n}
-bytes from the file descriptor
-\lstinline{fd},
-copies them into
-\lstinline{buf},
-and returns the number of bytes read.
-Each file descriptor that refers to a file
-has an offset associated with it.
+个字节，
+将它们复制到
+\lstinline{buf}
+中，
+并返回实际读取的字节数。
+每个指向文件（而非管道等）的文件描述符都关联着一个偏移量。
 \lstinline{read}
-reads data from the current file offset and then advances
-that offset by the number of bytes read:
-a subsequent
+从当前文件偏移量处读取数据，然后将该偏移量增加所读取的字节数：
+随后的一次
 \lstinline{read}
-will return the bytes following the ones returned by the first
-\lstinline{read}.
-When there are no more bytes to read,
+将返回第一次
 \lstinline{read}
-returns zero to indicate the end of the file.
+返回的字节之后的字节。
+当没有更多字节可读时，
+\lstinline{read}
+返回零以指示文件结束。
 
-The call
+调用
 \lstinline{write(fd},
 \lstinline{buf},
 \lstinline{n)}
-writes
-\lstinline{n}
-bytes from
+将
 \lstinline{buf}
-to the file descriptor
-\lstinline{fd}
-and returns the number of bytes written.
-Fewer than
+中的
 \lstinline{n}
-bytes are written only when an error occurs.
-Like
-\lstinline{read},
+个字节写入到文件描述符
+\lstinline{fd}
+所指向的文件，并返回写入的字节数。
+只有在发生错误时，写入的字节数才会少于
+\lstinline{n}。
+与
+\lstinline{read}
+类似，
 \lstinline{write}
-writes data at the current file offset and then advances
-that offset by the number of bytes written:
-each
+在当前文件偏移量处写入数据，然后将该偏移量增加写入的字节数：
+每个
 \lstinline{write}
-picks up where the previous one left off.
+都从上一个停止的地方继续写入。
 
-The following program fragment (which forms the essence of the program
-\lstinline{cat})
-copies data from its standard input
-to its standard output.  If an error occurs, it writes a message
-to the standard error.
+以下程序片段（构成了程序
+\lstinline{cat}
+的本质）将数据从标准输入复制到标准输出。如果发生错误，它会将一条消息写入标准错误。
 \begin{lstlisting}[]
 char buf[512];
 int n;
@@ -474,49 +353,40 @@ for(;;){
   }
 }
 \end{lstlisting}
-The important thing to note in the code fragment is that
+代码片段中需要注意的重要一点是
 \lstinline{cat}
-doesn't know whether it is reading from a file, console, or a pipe.
-Similarly 
+不知道它是从文件、控制台还是管道中读取。
+同样地，
 \lstinline{cat}
-doesn't know whether it is printing to a console, a file, or whatever.
-The use of file descriptors and the convention that file descriptor 0
-is input and file descriptor 1 is output allows a simple
-implementation
-of 
-\lstinline{cat}.
+也不知道它是向控制台、文件还是其他地方输出。
+文件描述符的使用以及文件描述符 0 是输入、文件描述符 1 是输出的约定，使得
+\lstinline{cat}
+的实现变得简单。
 
-The
 \lstinline{close}
-system call
-releases a file descriptor, making it free for reuse by a future
-\lstinline{open},
-\lstinline{pipe},
-or
+系统调用
+会释放一个文件描述符，使其可以被未来的
+\lstinline{open}、
+\lstinline{pipe}、
+或
 \lstinline{dup}
-system call (see below).
-A newly allocated file descriptor 
-is always the lowest-numbered unused
-descriptor of the current process.
+系统调用（见下文）重新使用。
+新分配的文件描述符
+始终是当前进程中编号最小的未使用描述符。
 
-File descriptors and
+文件描述符和
 \indexcode{fork}
-interact to make I/O redirection easy to implement.
+的交互使得 I/O 重定向易于实现。
 \lstinline{fork}
-copies the parent's file descriptor table along with its memory,
-so that the child starts with exactly the same open files as the parent.
-The system call
+将父进程的文件描述符表连同其内存一起复制，这样子进程开始时拥有与父进程完全相同的已打开文件。
+系统调用
 \indexcode{exec}
-replaces the calling process's memory but preserves its file table.
-This behavior allows the shell to
-implement \indextext{I/O redirection} by forking,
-closing and re-opening chosen file descriptors in the child,
-and then calling \lstinline{exec} to run the new program.
-Here is a simplified version of the code a shell runs for the
-command
+会替换调用进程的内存，但会保留其文件表。
+这种行为允许 shell 通过如下方式实现 \indextext{I/O 重定向}：先 fork，然后在子进程中关闭并重新打开选定的文件描述符，最后调用 \lstinline{exec} 来运行新程序。
+以下是一个 shell 为命令
 \lstinline{cat}
 \lstinline{<}
-\lstinline{input.txt}:
+\lstinline{input.txt} 所运行代码的简化版本：
 \begin{lstlisting}[]
 char *argv[2];
 
@@ -528,66 +398,50 @@ if(fork() == 0) {
   exec("cat", argv);
 }
 \end{lstlisting}
-After the child closes file descriptor 0,
+在子进程关闭文件描述符 0 之后，
 \lstinline{open}
-is guaranteed to use that file descriptor
-for the newly opened
-\lstinline{input.txt}:
-0 will be the smallest available file descriptor.
-\lstinline{cat}
-then executes with file descriptor 0 (standard input) referring to
-\lstinline{input.txt}.
-The parent process's file descriptors are not changed by this
-sequence, since it modifies only the child's descriptors.
+保证会使用那个文件描述符
+来打开新文件
+\lstinline{input.txt}：
+0 将是最小可用的文件描述符。
+然后，\lstinline{cat}
+执行时，它的文件描述符 0（标准输入）指向
+\lstinline{input.txt}。
+父进程的文件描述符不会受到这个序列的影响，因为它只修改了子进程的描述符。
 
-The code for I/O redirection in the xv6 shell works in exactly this way
-\lineref{user/sh.c:/case.REDIR/}.
-Recall that at this point in the code the shell has already forked the
-child shell and that 
-\lstinline{runcmd} 
-will call
+xv6 shell 中用于 I/O 重定向的代码正是以这种方式工作的
+\lineref{user/sh.c:/case.REDIR/}。
+回顾一下，在代码的这一点，shell 已经 fork 了子 shell，并且
+\lstinline{runcmd}
+将调用
 \lstinline{exec}
-to load the new program.
+来加载新程序。
 
-The second argument to \lstinline{open} consists of a set of
-flags, expressed as bits, that control what \lstinline{open}
-does. The possible values are defined in the file control (fcntl) header
-\linerefs{kernel/fcntl.h:/RDONLY/,/TRUNC/}:
-\lstinline{O_RDONLY},
-\lstinline{O_WRONLY},
-\lstinline{O_RDWR},
-\lstinline{O_CREATE}, and
-\lstinline{O_TRUNC},
-which instruct \lstinline{open} to
-open the file for reading,
-or for writing,
-or for both reading and writing,
-to create the file if it doesn't exist,
-and to truncate the file to zero length.
+\lstinline{open}
+的第二个参数由一组标志组成，以位的形式表示，用于控制 \lstinline{open}
+的行为。这些可能的值在文件控制（fcntl）头文件中定义
+\linerefs{kernel/fcntl.h:/RDONLY/,/TRUNC/}：
+\lstinline{O_RDONLY}、
+\lstinline{O_WRONLY}、
+\lstinline{O_RDWR}、
+\lstinline{O_CREATE} 和
+\lstinline{O_TRUNC}，
+它们指示 \lstinline{open} 分别以只读、只写、读写方式打开文件，如果文件不存在则创建它，以及将文件截断为零长度。
 
-Now it should be clear why it is helpful that
+现在应该清楚为什么将
 \lstinline{fork}
-and 
+和 
 \lstinline{exec} 
-are separate calls: between the two, the shell has a chance
-to redirect the child's I/O without disturbing the I/O setup of the main shell.
-One could instead imagine a hypothetical combined
-\lstinline{forkexec} system call,
-but the options for doing I/O redirection with such a call
-seem awkward.
-The shell could modify its own I/O
-setup before calling \lstinline{forkexec} (and then
-un-do those modifications); or
-\lstinline{forkexec} could take instructions for I/O
-redirection as arguments;
-or (least attractively) every program like \lstinline{cat} could
-be taught to do its own I/O redirection.
+分开调用是有帮助的了：在两者之间，shell 有机会重定向子进程的 I/O，而不会干扰主 shell 自身的 I/O 设置。可以想象一个假设的组合
+\lstinline{forkexec} 系统调用，但是使用这样一个调用来执行 I/O 重定向的选项似乎很笨拙。
+Shell 可以在调用 \lstinline{forkexec} 之前修改自身的 I/O 设置（然后再撤销这些修改）；或者
+\lstinline{forkexec} 可以接受用于指示 I/O 重定向的参数；
+或者（最不吸引人的）每个像 \lstinline{cat} 这样的程序都必须被教会如何执行自身的 I/O 重定向。
 
-Although
+尽管
 \lstinline{fork}
-copies the file descriptor table, each underlying file offset is shared
-between parent and child.
-Consider this example:
+复制了文件描述符表，但每个底层的文件偏移量在父进程和子进程之间是共享的。
+考虑这个例子：
 \begin{lstlisting}[]
 if(fork() == 0) {
   write(1, "hello ", 6);
@@ -597,94 +451,80 @@ if(fork() == 0) {
   write(1, "world\n", 6);
 }
 \end{lstlisting}
-At the end of this fragment, the file attached to file descriptor 1
-will contain the data
+在这个片段的最后，附加到文件描述符 1 的文件将包含数据
 \lstinline{hello}
-\lstinline{world}.
-The
+\lstinline{world}。
+父进程中的
 \lstinline{write}
-in the parent
-(which, thanks to
-\lstinline{wait},
-runs only after the child is done)
-picks up where the child's
+（由于
+\lstinline{wait}
+的存在，它会在子进程结束后运行）
+会从子进程的
 \lstinline{write}
-left off.
-This behavior helps produce sequential output from sequences
-of shell commands, like
+结束的地方继续写入。
+这种行为有助于从一系列的 shell 命令（例如
 \lstinline{(echo}
 \lstinline{hello};
 \lstinline{echo}
 \lstinline{world)}
-\lstinline{>output.txt}.
+\lstinline{>output.txt}）中产生顺序输出。
 
-The
 \lstinline{dup}
-system call duplicates an existing file descriptor,
-returning a new one that refers to the same underlying I/O object.
-Both file descriptors share an offset, just as the file descriptors
-duplicated by
+系统调用复制一个现有的文件描述符，返回一个指向相同底层 I/O 对象的新文件描述符。
+两个文件描述符共享一个偏移量，就像通过
 \lstinline{fork}
-do.
-This is another way to write
+复制的文件描述符一样。
+这是将
 \lstinline{hello}
 \lstinline{world}
-into a file:
+写入文件的另一种方式：
 \begin{lstlisting}[]
 fd = dup(1);
 write(1, "hello ", 6);
 write(fd, "world\n", 6);
 \end{lstlisting}
 
-Two file descriptors share an offset if they were derived from
-the same original file descriptor by a sequence of
+如果两个文件描述符是通过一系列
 \lstinline{fork}
-and
+和
 \lstinline{dup}
-calls.
-Otherwise file descriptors do not share offsets, even if they
-resulted from 
+调用从同一个原始文件描述符派生出来的，那么它们共享一个偏移量。
+否则，即使它们是通过对同一个文件的
 \lstinline{open}
-calls for the same file.  
+调用得到的，也不会共享偏移量。
 \lstinline{dup} 
-allows shells to implement commands like this:
+允许 shell 实现如下命令：
 \lstinline{ls}
 \lstinline{existing-file}
 \lstinline{non-existing-file}
 \lstinline{>}
 \lstinline{tmp1}
-\lstinline{2>&1}.
-The
+\lstinline{2>&1}。
+其中的
 \lstinline{2>&1}
-tells the shell to give the command a file descriptor 2 that
-is a duplicate of descriptor 1.
-Both the name of the existing file and the error message for the
-non-existing file will show up in the file
-\lstinline{tmp1}.
-The xv6 shell doesn't support I/O redirection for the error file
-descriptor, but now you know how to implement it.
+告诉 shell 为命令提供一个文件描述符 2，该描述符是描述符 1 的一个副本。
+那么，已存在文件的名称和不存在文件的错误消息都将出现在文件
+\lstinline{tmp1}
+中。
+xv6 shell 不支持对错误文件描述符的 I/O 重定向，但是现在您知道如何实现它了。
 
-File descriptors are a powerful abstraction,
-because they hide the details of what they are connected to:
-a process writing to file descriptor 1 may be writing to a
-file, to a device like the console, or to a pipe.
+文件描述符是一个强大的抽象，
+因为它们隐藏了它们所连接的具体对象的细节：
+一个向文件描述符 1 写入的进程可能正在写入一个文件、一个像控制台这样的设备，或者一个管道。
 %% 
 %% 	Pipes
 %% 
-\section{Pipes}
+\section{管道}
 
-A 
-\indextext{pipe} 
-is a small kernel buffer exposed to processes as a pair of
-file descriptors, one for reading and one for writing.
-Writing data to one end of the pipe
-makes that data available for reading from the other end of the pipe.
-Pipes provide a way for processes to communicate.
+一个
+\indextext{管道} 
+是一个小的内核缓冲区，它以一对文件描述符的形式暴露给进程，一个用于读取，一个用于写入。
+向管道的一端写入数据，会使这些数据可以从管道的另一端读取。
+管道为进程提供了一种通信方式。
 
-The following example code runs the program
-\lstinline{wc}
-with standard input connected to
-the read end of a pipe.
+下面的示例代码运行程序
+\lstinline{wc}，
+并将其标准输入连接到一个管道的读取端。
 \begin{lstlisting}[]
 int p[2];
 char *argv[2];
@@ -705,155 +545,100 @@ if(fork() == 0) {
   close(p[1]);
 }
 \end{lstlisting}
-The program calls
-\lstinline{pipe},
-which creates a new pipe and records the read and write
-file descriptors in the array
-\lstinline{p}.
-After
-\lstinline{fork},
-both parent and child have file descriptors referring to the pipe.
-The child calls \lstinline{close} and \lstinline{dup} to make file descriptor
-zero refer to the read end of the pipe,
-closes the file descriptors in
-\lstinline{p},
-and calls \lstinline{exec} to run
-\lstinline{wc}.
-When 
+程序调用
+\lstinline{pipe}，
+它会创建一个新管道并将读和写文件描述符记录在数组
+\lstinline{p}
+中。
+在
+\lstinline{fork}
+之后，父进程和子进程都有指向该管道的文件描述符。
+子进程调用 \lstinline{close} 和 \lstinline{dup} 使文件描述符
+零指向管道的读取端，
+关闭
+\lstinline{p}
+中的文件描述符，
+然后调用 \lstinline{exec} 来运行
+\lstinline{wc}。
+当 
 \lstinline{wc}
-reads from its standard input, it reads from the pipe.
-The parent closes the read side of the pipe,
-writes to the pipe,
-and then closes the write side.
+从其标准输入读取时，它将从管道中读取。
+父进程关闭管道的读取端，
+向管道写入数据，
+然后关闭写入端。
 
-If no data is available, a
+如果没有数据可用，对管道的
 \lstinline{read}
-on a pipe waits for either data to be written or for all
-file descriptors referring to the write end to be closed;
-in the latter case,
+会等待，直到有数据被写入，或者所有指向管道写入端的文件描述符都被关闭；
+在后一种情况下，
 \lstinline{read}
-will return 0, just as if the end of a data file had been reached.
-The fact that
+将返回 0，就像到达了数据文件的末尾一样。
 \lstinline{read}
-blocks until it is impossible for new data to arrive
-is one reason that it's important for the child to
-close the write end of the pipe
-before executing
+会阻塞直到不可能有新数据到达，这一事实是上述例子中子进程必须
+在运行
 \lstinline{wc}
-above: if one of
-\lstinline{wc} 's
-file descriptors referred to the write end of the pipe,
+之前关闭管道的写入端的重要原因之一：如果
+\lstinline{wc} 的
+某个文件描述符指向了管道的写入端，
 \lstinline{wc}
-would never see end-of-file.
+将永远不会看到文件结束符。
 
-The xv6 shell implements pipelines such as
+xv6 shell 实现了像
 \lstinline{grep fork sh.c | wc -l}
-in a manner similar to the above code
-\lineref{user/sh.c:/case.PIPE/}.
-The child process creates a pipe to connect the left end of the pipeline
-with the right end. Then it calls
+这样的管道，其方式与上述代码类似
+\lineref{user/sh.c:/case.PIPE/}。
+子进程创建一个管道来连接管道的左端和右端。然后它调用
 \lstinline{fork}
-and
+和
 \lstinline{runcmd}
-for the left end of the pipeline
-and 
+来处理管道的左端，
+并再次调用
 \lstinline{fork}
-and
+和
 \lstinline{runcmd}
-for the right end, and waits for both to finish.
-The right end of the pipeline may be a command that itself includes a
-pipe (e.g.,
+来处理管道的右端，然后等待两者都完成。
+管道的右端本身可能是一个包含管道的命令（例如，
 \lstinline{a}
 \lstinline{|}
 \lstinline{b}
 \lstinline{|}
-\lstinline{c)}, 
-which itself forks two new child processes (one for
+\lstinline{c})，
+这又会 fork 出两个新的子进程（一个用于
 \lstinline{b}
-and one for
-\lstinline{c}).
-Thus, the shell may
-create a tree of processes.  The leaves of this tree are commands and
-the interior nodes are processes that wait until the left and right
-children complete.
+，一个用于
+\lstinline{c}）。
+因此，shell 可能会创建一棵进程树。这棵树的叶子节点是命令，内部节点则是等待左右子节点完成的进程。
 
-% In principle, one could have the interior nodes run the left end of a
-% pipeline, but doing so correctly would complicate the
-% implementation. Consider making just the following modification:
-% change \lstinline{sh.c} to not fork for \lstinline{p->left} and run
-% \lstinline{runcmd(p->left)} in the interior process. Then, for
-% example, \lstinline{echo hi | wc} won't produce output, because when
-% \lstinline{echo hi} exits in \lstinline{runcmd}, the interior process
-% exits and never calls fork to run the right end of the pipe.  This
-% incorrect behavior could be fixed by not calling \lstinline{exit} in
-% \lstinline{runcmd} for interior processes, but this fix complicates
-% the code: now \lstinline{runcmd} needs to know if it's in an interior
-% process or not.  Complications also arise when not forking for
-% \lstinline{runcmd(p->right)}.  For example, with just that
-% modification, \lstinline{sleep 10 | echo hi} will immediately print
-% ``hi' and a new prompt, instead of after 10 seconds; this happens because \lstinline{echo} runs
-% immediately and exits, not waiting for \lstinline{sleep} to finish.
-% Since the goal of the \lstinline{sh.c} is to be as simple as possible,
-% it doesn't try to avoid creating interior processes.
-
-Pipes may seem no more powerful than temporary files:
-the pipeline
-\begin{lstlisting}[]
-echo hello world | wc
-\end{lstlisting}
-could be implemented without pipes as
-\begin{lstlisting}[]
-echo hello world >/tmp/xyz; wc </tmp/xyz
-\end{lstlisting}
-Pipes have at least three advantages over temporary files
-in this situation.
-First, pipes automatically clean themselves up;
-with the file redirection, a shell would have to
-be careful to remove
-\lstinline{/tmp/xyz}
-when done.
-Second, pipes can pass arbitrarily long streams of
-data, while file redirection requires enough free space
-on disk to store all the data.
-Third, pipes allow for parallel execution of pipeline stages,
-while the file approach requires the first program to finish
-before the second starts.
-% Fourth, if you are implementing inter-process communication,
-% pipes' blocking reads and writes are more efficient
-% than the non-blocking semantics of files.
 %% 
 %% 	File system
 %% 
-\section{File system}
+\section{文件系统}
 
-The xv6 file system provides data files,
-which contain uninterpreted byte arrays,
-and directories, which
-contain named references to data files and other directories.
-The directories form a tree, starting
-at a special directory called the 
-\indextext{root}.
-A 
-\indextext{path} 
-like
+xv6 文件系统提供数据文件，其中包含未解释的字节数组，以及目录，其中包含指向数据文件和其他目录的具名引用。
+目录构成一棵树，从一个称为
+\indextext{根目录}
+的特殊目录开始。
+像
 \lstinline{/a/b/c}
-refers to the file or directory named
-\lstinline{c}
-inside the directory named
-\lstinline{b}
-inside the directory named
-\lstinline{a}
-in the root directory
-\lstinline{/}.
-Paths that don't begin with
+这样的
+\indextext{路径}
+指的是根目录
 \lstinline{/}
-are evaluated relative to the calling process's
-\indextext{current directory},
-which can be changed with the
+下，名为
+\lstinline{a}
+的目录内，名为
+\lstinline{b}
+的目录内，名为
+\lstinline{c}
+的文件或目录。
+不以
+\lstinline{/}
+开头的路径相对于调用进程的
+\indextext{当前目录}
+进行求值，当前目录可以通过
 \lstinline{chdir}
-system call.
-Both these code fragments open the same file
-(assuming all the directories involved exist):
+系统调用进行更改。
+下面两个代码片段打开的是同一个文件（假设所有涉及的目录都存在）：
 \begin{lstlisting}[]
 chdir("/a");
 chdir("b");
@@ -861,21 +646,21 @@ open("c", O_RDONLY);
 
 open("/a/b/c", O_RDONLY);
 \end{lstlisting}
-The first fragment changes the process's current directory to
-\lstinline{/a/b};
-the second neither refers to nor changes the process's current directory.
+第一个片段将进程的当前目录更改为
+\lstinline{/a/b}；
+第二个片段既不引用也不更改进程的当前目录。
 
-There are system calls to create new files and directories:
+有一些系统调用可以创建新文件和目录：
 \lstinline{mkdir}
-creates a new directory,
-\lstinline{open}
-with the
+创建一个新目录，
+使用带
 \lstinline{O_CREATE}
-flag creates a new data file,
-and
+标志的 \lstinline{open}
+创建一个新的数据文件，
+而
 \lstinline{mknod}
-creates a new device file.
-This example illustrates all three:
+创建一个新的设备文件。
+下面的例子展示了这三种操作：
 \begin{lstlisting}[]
 mkdir("/dir");
 fd = open("/dir/file", O_CREATE|O_WRONLY);
@@ -883,234 +668,168 @@ close(fd);
 mknod("/console", 1, 1);
 \end{lstlisting}
 \lstinline{mknod}
-creates a special file that refers to a device.
-Associated with a device file are
-the major and minor device numbers
-(the two arguments to 
-\lstinline{mknod}),
-which uniquely identify a kernel device.
-When a process later opens a device file, the kernel
-diverts
+创建一个指向设备的特殊文件。
+与一个设备文件关联的是主设备号和次设备号
+（\lstinline{mknod}
+的两个参数），
+它们唯一地标识一个内核设备。
+当进程随后打开一个设备文件时，内核会将
 \lstinline{read}
-and
+和
 \lstinline{write}
-system calls to the kernel device implementation
-instead of passing them to the file system.
+系统调用转向内核设备实现，而不是将它们传递给文件系统。
 
-A file's name is distinct from the file itself;
-the same underlying file, called an 
-\indextext{inode}, 
-can have multiple names,
-called 
-\indextext{links}.
-Each link consists of an entry in a directory;
-the entry contains a file name and a reference
-to an inode.
-An inode holds
-\indextext{metadata}
-about a file, including
-its type (file or directory or device),
-its length,
-the location of the file's content on disk,
-and the number of links to a file.
+文件的名字和文件本身是不同的；
+同一个底层文件，称为
+\indextext{inode}，
+可以有多个名字，
+称为
+\indextext{链接}。
+每个链接由目录中的一个条目组成；
+该条目包含一个文件名和一个指向 inode 的引用。
+一个 inode 保存着关于一个文件的
+\indextext{元数据}，
+包括其类型（文件、目录或设备）、
+其长度、
+文件内容在磁盘上的位置，
+以及指向该文件的链接数。
 
-The
 \lstinline{fstat}
-system call
-retrieves information from the inode that a
-file descriptor refers to.
-It fills in a
+系统调用
+从文件描述符所引用的 inode 中检索信息。
+它填充一个
 \lstinline{struct}
-\lstinline{stat},
-defined in
-\lstinline{stat.h} \fileref{kernel/stat.h}
-as:
+\lstinline{stat}，
+该结构在
+\lstinline{stat.h} \fileref{kernel/stat.h} 中定义如下：
 \begin{lstlisting}[]
-#define T_DIR     1   // Directory
-#define T_FILE    2   // File
-#define T_DEVICE  3   // Device
+#define T_DIR     1   // 目录
+#define T_FILE    2   // 文件
+#define T_DEVICE  3   // 设备
 
 struct stat {
-  int dev;     // File system's disk device
-  uint ino;    // Inode number
-  short type;  // Type of file
-  short nlink; // Number of links to file
-  uint64 size; // Size of file in bytes
+  int dev;     // 文件系统的磁盘设备
+  uint ino;    // Inode 编号
+  short type;  // 文件类型
+  short nlink; // 指向文件的链接数
+  uint64 size; // 文件大小（字节）
 };
 \end{lstlisting}
 
-The
 \lstinline{link}
-system call creates another file system name 
-referring to the same inode as an existing file.
-This fragment creates a new file named both
+系统调用创建另一个指向与现有文件相同 inode 的文件系统名字。
+这个片段创建了一个新文件，它同时拥有名字
 \lstinline{a}
-and
-\lstinline{b}.
+和
+\lstinline{b}。
 \begin{lstlisting}[]
 open("a", O_CREATE|O_WRONLY);
 link("a", "b");
 \end{lstlisting}
-Reading from or writing to
+读取或写入
 \lstinline{a}
-is the same as reading from or writing to
-\lstinline{b}.
-Each inode is identified by a unique
-\textit{inode}
-\textit{number}.
-After the code sequence above, it is possible
-to determine that
-\lstinline{a}
-and
+与读取或写入
 \lstinline{b}
-refer to the same underlying contents by inspecting the
-result of 
-\lstinline{fstat}:
-both will return the same inode number 
-(\lstinline{ino}),
-and the
+是相同的。
+每个 inode 由一个唯一的
+\textit{inode}
+\textit{编号}标识。
+在上面的代码序列之后，可以通过检查
+\lstinline{fstat}
+的结果来判断
+\lstinline{a}
+和
+\lstinline{b}
+是否指向相同的底层内容：
+两者将返回相同的 inode 编号 
+(\lstinline{ino})，
+并且
 \lstinline{nlink}
-count will be set to 2.
+计数将被设置为 2。
 
-The
 \lstinline{unlink}
-system call removes a name from the file system.
-The file's inode and the disk space holding its content
-are only freed when the file's link count is zero and
-no file descriptors refer to it.
-Thus adding
+系统调用从文件系统中移除一个名字。
+只有当文件的链接计数为零并且没有文件描述符指向它时，文件的 inode 和存放其内容的磁盘空间才会被释放。
+因此，如果在上一个代码序列后加上
 \begin{lstlisting}[]
 unlink("a");
 \end{lstlisting}
-to the last code sequence leaves the inode
-and file content accessible as
-\lstinline{b}.
-Furthermore,
+inode 和文件内容仍然可以通过
+\lstinline{b}
+访问到。
+此外，
 \begin{lstlisting}[]
 fd = open("/tmp/xyz", O_CREATE|O_RDWR);
 unlink("/tmp/xyz");
 \end{lstlisting}
-is an idiomatic way to create a temporary inode 
-with no name
-that will be cleaned up when the process closes 
+是一种创建没有名字的临时 inode 的惯用方法，当进程关闭
 \lstinline{fd}
-or exits.
+或退出时，该临时 inode 会被自动清理掉。
 
-Unix provides
-file utilities callable from the shell
-as user-level programs, for example
-\lstinline{mkdir},
-\lstinline{ln},
-and
-\lstinline{rm}.
-This design allows anyone to extend the command-line interface
-by adding new user-level programs.  In hindsight this plan seems obvious,
-but other systems designed at the time of Unix often built such commands into
-the shell (and built the shell into the kernel).
+Unix 提供了可以从 shell 调用的文件实用程序，作为用户级程序，例如
+\lstinline{mkdir}、
+\lstinline{ln}、
+和
+\lstinline{rm}。
+这种设计允许任何人通过添加新的用户级程序来扩展命令行界面。事后看来，这个计划似乎是显而易见的，但在 Unix 时代设计的其他系统通常将这些命令内置于 shell 中（并且将 shell 内置于内核中）。
 
-One exception is
-\lstinline{cd},
-which is built into the shell
-\lineref{user/sh.c:/if.cmd.0..==..c./}.
+一个例外是
+\lstinline{cd}，
+它被内置于 shell 中
+\lineref{user/sh.c:/if.cmd.0..==..c./}。
 \lstinline{cd}
-must change the current working directory of the
-shell itself.  If
+必须更改 shell 自身的当前工作目录。如果
 \lstinline{cd}
-were run as a regular command, then the shell would fork a child
-process, the child process would run
-\lstinline{cd},
-and
+作为一个普通命令运行，那么 shell 会 fork 一个子进程，子进程会运行
+\lstinline{cd}，
+而
 \lstinline{cd}
-would change the 
-\textit{child} 's 
-working directory.  The parent's (i.e.,
-the shell's) working directory would not change.
+会更改
+\textit{子进程}的
+工作目录。父进程（即
+shell）的工作目录不会改变。
 %% 
 %% 	Real world
 %% 
-\section{Real world}
+\section{现实世界}
 
-Unix's combination of ``standard'' file
-descriptors, pipes, and convenient shell syntax for
-operations on them was a major advance in writing
-general-purpose reusable programs.
-The idea sparked a culture of ``software tools'' that was
-responsible for much of Unix's power and popularity,
-and the shell was the first so-called ``scripting language.''
-The Unix system call interface persists today in systems like
-BSD, Linux, and macOS.
+Unix 将“标准”文件描述符、管道以及方便的 shell 语法（用于操作它们）结合在一起，是编写通用、可重用程序方面的一项重大进步。
+这个想法激发了一种“软件工具”文化，这是 Unix 强大和流行的主要原因之一，而 shell 是第一个所谓的“脚本语言”。
+Unix 系统调用接口至今仍存在于 BSD、Linux 和 macOS 等系统中。
 
-The Unix system call interface has been standardized through the Portable
-Operating System Interface (POSIX) standard.
-Xv6 is
-\textit{not}
-POSIX compliant:  it is missing many system calls (including basic ones such as
-\lstinline{lseek}),
-and many of the system calls it does provide differ from the standard.
-Our main goals for xv6 are
-simplicity and clarity while providing a simple UNIX-like system-call interface.
-Several people have extended xv6 with a few more system calls and a simple
-C library in order to run basic Unix programs.  Modern kernels, however,
-provide many more system calls, and many more kinds of kernel services, than
-xv6.  For example, they support networking, windowing systems, user-level threads,
-drivers for many devices, and so on.  Modern kernels evolve continuously and
-rapidly, and offer many features beyond POSIX.
+Unix 系统调用接口已通过可移植操作系统接口（POSIX）标准进行了标准化。
+Xv6
+\textit{不}
+符合 POSIX 标准：它缺少许多系统调用（包括像
+\lstinline{lseek}
+这样的基本调用），
+并且它提供的许多系统调用也与标准不同。
+我们对 xv6 的主要目标是简单性和清晰性，同时提供一个简单的类 UNIX 系统调用接口。
+有些人通过添加更多的系统调用和一个简单的 C 库来扩展 xv6，以便能够运行基本的 Unix 程序。然而，现代内核提供了比 xv6 多得多的系统调用和更多种类的内核服务。例如，它们支持网络、窗口系统、用户级线程、众多设备的驱动程序等等。现代内核不断快速发展，并提供许多超越 POSIX 的特性。
 
-Unix unified access to multiple types of resources (files,
-directories, and devices) with a single set of 
-file-name and file-descriptor interfaces.
-This idea can be extended to more kinds of resources;
-a good example is Plan 9~\cite{Presotto91plan9},
-which applied the ``resources are files''
-concept to 
-networks, graphics, and more.
-However, most Unix-derived operating systems have
-not followed this route.
+Unix 通过单一的文件名和文件描述符接口集合，统一了对多种类型资源（文件、目录和设备）的访问。
+这个想法可以扩展到更多种类的资源；
+一个很好的例子是 Plan 9~\cite{Presotto91plan9}，
+它将“资源即文件”的概念应用于网络、图形等。
+然而，大多数源自 Unix 的操作系统并没有遵循这条道路。
 
-The file system and file descriptors have been  powerful
-abstractions.
-Even so, there are other models for operating system interfaces.
-Multics, a predecessor of Unix,
-abstracted file storage in a way that made it look like memory,
-producing a very different flavor of interface.
-The complexity of the Multics design had a direct influence
-on the designers of Unix, who aimed to build something simpler.
-% XXX can we cut this, since its point is the same as the next paragraph?
-% An operating system interface that went out of fashion
-% decades ago but has recently returned is the idea of a virtual machine monitor.
-% Such systems provide a superficially different interface from xv6,
-% but the basic concepts are still the same:
-% a virtual machine, like a process, consists of some memory and
-% one or more register sets;
-% the virtual machine has access to one large file called
-% a virtual disk instead of a file system;
-% virtual machines send messages to each other
-% and the outside world using virtual network devices
-% instead of pipes or files.
+文件系统和文件描述符是强大的抽象。
+即便如此，操作系统接口也有其他模型。
+Unix 的前身 Multics 以使其看起来像内存的方式抽象了文件存储，从而产生了一种截然不同的接口风格。
+Multics 设计的复杂性直接影响了 Unix 的设计者，他们旨在构建更简单的东西。
 
-Xv6 does not provide a notion of users or of protecting
-one user from another; in Unix terms, all xv6 processes
-run as root.
+Xv6 没有提供用户或保护一个用户免受另一个用户侵害的概念；用 Unix 的术语来说，所有 xv6 进程都以 root 身份运行。
 
-This book examines how xv6 implements its Unix-like interface,
-but the ideas and concepts apply to more than just Unix.
-Any operating system must multiplex processes onto
-the underlying hardware, isolate processes from each
-other, and provide mechanisms for controlled
-inter-process communication.
-After studying xv6, you should be able to
-look at other, more complex operating systems
-and see the concepts underlying xv6 in those systems as well.
+本书探讨了 xv6 如何实现其类 Unix 接口，但这些思想和方法不仅适用于 Unix。
+任何操作系统都必须将多路复用进程到底层硬件上，将进程彼此隔离，并提供受控的进程间通信机制。
+学习完 xv6 之后，您应该能够审视其他更复杂的操作系统，并在这些系统中也看到 xv6 所蕴含的概念。
 
 %% 
-\section{Exercises}
+\section{练习}
 %%
 
 \begin{enumerate}
 
-\item Write a program that uses UNIX system calls to
-``ping-pong'' a byte between two processes over a pair
-of pipes, one for each direction. Measure the
-program's performance, in exchanges per second.
+\item 编写一个程序，使用 Unix 系统调用，通过一对管道（每个方向一个）在两个进程之间“乒乓”传递一个字节。测量程序的性能，以每秒交换次数为单位。
 
 \end{enumerate}

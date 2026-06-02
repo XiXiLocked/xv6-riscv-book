@@ -8,12 +8,39 @@
 % \usepackage{showidx}
 \usepackage{imakeidx}
 \usepackage{booktabs}
-\usepackage{url}
 \usepackage{etoolbox}  % for showidx
 \usepackage{fullpage}
 \usepackage{soul}
 \usepackage[utf8]{inputenc}
 \usepackage{gnuplot-lua-tikz}
+
+%引入中文宏包，并保持原书西式排版标签 (如 Chapter 1, Contents)
+\usepackage[UTF8, scheme=plain]{ctex}
+
+% ==================== 字体精准配置 (针对 xelatex) ====================
+% 1. 配置中文正文与粗体 (使用 font 目录下的静态思源宋体)
+\setCJKmainfont[
+    Path = font/,
+    Extension = .otf,
+    BoldFont = NotoSerifSC-Bold
+]{NotoSerifSC-Regular}
+
+% 2. 配置英文正文与粗体 (使用原项目自带的 MinionPro，保持原汁原味)
+\setmainfont[
+    Path = font/,
+    Extension = .otf,
+    BoldFont = MinionPro-Bold,
+    ItalicFont = MinionPro-It.otf
+]{MinionPro-Regular}
+
+% 3. 配置全书等宽代码字体 (使用刚才为你挑选的标准静态版 JetBrains Mono)
+\setmonofont[
+    Path = font/,
+    Extension = .ttf,
+    BoldFont = JetBrainsMono-Bold,
+    ItalicFont = JetBrainsMono-Italic
+]{JetBrainsMono-Regular}
+% ==================================================================
 
 \usepackage{hyperref}  % should be last
 

@@ -1,459 +1,122 @@
-\chapter{File system}
+\chapter{文件系统}
 \label{CH:FS}
-%         is it process or kernel thread?
+%         这是进程还是内核线程？
 % 
-%         the logging text (and some of the buffer text) assumes the reader
-%         knows a fair amount about how inodes and directories work,
-%         but they are introduced later.
+%         日志文本（以及部分缓冲区文本）假设读者对 inode 和目录
+%         的工作方式有相当了解，但它们将在后面介绍。
 % 
-% 	have to decide on processor vs CPU.
-% 	
-% 	be sure to say buffer, not block 
+%         必须决定使用 processor 还是 CPU。
 % 
-% 	Mount
+%         确保说的是 buffer，不是 block
+% 
+%         Mount
 
-The purpose of a file system is to organize and store data. File systems
-typically support sharing of data among users and applications, as well as
-\indextext{persistence}
-so that data is still available after a reboot.
+文件系统的目的是组织和存储数据。文件系统通常支持用户和应用程序之间共享数据，并支持持久性，以便重启后数据仍然可用。
 
-The xv6 file system provides Unix-like files, directories, and pathnames
-(see Chapter~\ref{CH:UNIX}), and stores its data on a virtio disk for
-persistence. The file system addresses
-several challenges:
+xv6 文件系统提供了类似 Unix 的文件、目录和路径名（见第~\ref{CH:UNIX}~章），并将其数据存储在 virtio 磁盘上以实现持久性。该文件系统应对几个挑战：
 \begin{itemize}
   
-\item The file system needs on-disk data structures to represent the tree
-of named directories and files, to record the identities of the
-blocks that hold each file's content, and to record which areas
-of the disk are free.
-\item The file system must support
-\indextext{crash recovery}.
-That is, if a crash (e.g., power failure) occurs, the file system must
-still work correctly after a restart. The risk is that a crash might
-interrupt a sequence of updates and leave inconsistent on-disk data
-structures (e.g., a block that is both used in a file and marked free).
-\item Different processes may operate on the file system at the same time,
-so the file-system code must coordinate to maintain invariants.
-\item Accessing a disk is orders of magnitude slower than accessing
-memory, so the file system must maintain an in-memory cache of
-popular blocks.
+\item 文件系统需要磁盘上的数据结构来表示命名的目录和文件树，记录保存每个文件内容的块的标识，并记录磁盘的哪些区域是空闲的。
+\item 文件系统必须支持崩溃恢复。也就是说，如果发生崩溃（例如断电），文件系统在重启后必须仍然正确工作。风险在于崩溃可能中断一系列更新，并导致磁盘上的数据结构不一致（例如，一个块既在文件中使用又被标记为空闲）。
+\item 不同的进程可能同时操作文件系统，因此文件系统代码必须进行协调以维护不变量。
+\item 访问磁盘比访问内存慢几个数量级，因此文件系统必须维护一个常用块的内存缓存。
 
 \end{itemize}
 
-The rest of this chapter explains how xv6 addresses these challenges.
+本章其余部分解释 xv6 如何应对这些挑战。
 %% 
 %%  -------------------------------------------
 %% 
-\section{Overview}
+\section{概述}
 
-The xv6 file system implementation is
-organized in seven layers, shown in 
-Figure~\ref{fig:fslayer}.
-The disk layer reads and writes blocks on an virtio hard drive.
-The buffer cache layer caches disk blocks and synchronizes access to them,
-making sure that only one kernel process at a time can modify the
-data stored in any particular block.  The logging layer allows higher
-layers to wrap updates to several blocks in a
-\indextext{transaction},
-and ensures that the blocks are updated atomically in the
-face of crashes (i.e., all of them are updated or none).
-The inode layer provides individual files, each represented as an
-\indextext{inode}
-with a unique i-number
-and some blocks holding the file's data.  The directory
-layer implements each directory as a special kind of
-inode whose content is a sequence of directory entries, each of which contains a
-file's name and i-number.
-The pathname layer provides
-hierarchical path names like
-\lstinline{/usr/rtm/xv6/fs.c},
-and resolves them with recursive lookup.
-The file descriptor layer abstracts many Unix resources (e.g., pipes, devices,
-files, etc.) using the file system interface, simplifying the lives of
-application programmers.
+xv6 文件系统实现分为七层，如图~\ref{fig:fslayer}~所示。磁盘层在 virtio 硬盘上读写块。缓冲区缓存层缓存磁盘块并同步对它们的访问，确保每次只有一个内核进程可以修改任何特定块中存储的数据。日志层允许上层将对多个块的更新包装在一个事务中，并确保在崩溃时这些块被原子性地更新（即要么全部更新，要么都不更新）。inode 层提供单个文件，每个文件表示为一个具有唯一 i-number 和一些保存文件数据块的 inode。目录层将每个目录实现为一种特殊类型的 inode，其内容是一系列目录项，每个目录项包含一个文件名和 i-number。路径名层提供分层路径名，如 \lstinline{/usr/rtm/xv6/fs.c}，并通过递归查找解析它们。文件描述符层使用文件系统接口抽象许多 Unix 资源（例如管道、设备、文件等），简化了应用程序员的生活。
 
 \begin{figure}[t]
 \center
 \includegraphics[scale=0.5]{fig/fslayer.pdf}
-\caption{Layers of the xv6 file system.}
+\caption{xv6 文件系统的层次。}
 \label{fig:fslayer}
 \end{figure}
 
-Disk hardware traditionally presents the data on the
-disk as a numbered sequence of 512-byte 
-\textit{blocks} 
-\index{block}
-(also called 
-\textit{sectors}): 
-\index{sector}
-sector 0 is the first 512 bytes, sector 1 is the next, and so on. The block size
-that an operating system uses for its file system maybe different than the
-sector size that a disk uses, but typically the block size is a multiple of the
-sector size. Xv6 holds copies of blocks that it has read into memory
-in objects of type
-\lstinline{struct buf}
-\lineref{kernel/buf.h:/^struct.buf/}.
-The
-data stored in this structure is sometimes out of sync with the disk: it might have
-not yet been read in from disk (the disk is working on it but hasn't returned
-the sector's content yet), or it might have been updated by software
-but not yet written to the disk.
+传统上，磁盘硬件将磁盘上的数据显示为编号的 512 字节块序列（也称为扇区）：扇区 0 是前 512 字节，扇区 1 是下一个，依此类推。操作系统为其文件系统使用的块大小可能与磁盘使用的扇区大小不同，但通常块大小是扇区大小的倍数。Xv6 将它读入内存的块的副本保存在 \lstinline{struct buf} 类型的对象中。此结构中存储的数据有时与磁盘不同步：它可能尚未从磁盘读入（磁盘正在处理但尚未返回扇区内容），或者可能已被软件更新但尚未写入磁盘。
 
-The file system must have a plan for where it stores inodes and
-content blocks on the disk.
-To do so, xv6 divides the disk into several
-sections, as 
-Figure~\ref{fig:fslayout} shows.
-The file system does not use
-block 0 (it holds the boot sector).  Block 1 is called the 
-\indextext{superblock}; 
-it contains metadata about the file system (the file system size in blocks, the
-number of data blocks, the number of inodes, and the number of blocks in the
-log).  Blocks starting at 2 hold the log.  After the log are the inodes, with multiple inodes per block.  After
-those come bitmap blocks tracking which data blocks are in use.
-The remaining blocks are data blocks; each is either marked
-free in the bitmap block, or holds content for a file or directory.
-The superblock is filled in by a separate program, called
-\indexcode{mkfs},
-which builds an initial file system.
+文件系统必须有一个计划来存储 inode 和内容块在磁盘上的位置。为此，xv6 将磁盘划分为几个部分，如图~\ref{fig:fslayout}~所示。文件系统不使用块 0（它包含引导扇区）。块 1 称为超级块；它包含有关文件系统的元数据（以块为单位的文件系统大小、数据块数量、inode 数量以及日志中的块数量）。从块 2 开始的块保存日志。日志之后是 inode，每个块有多个 inode。在这些之后是位图块，用于跟踪哪些数据块正在使用。其余的是数据块；每个数据块在位图块中要么被标记为空闲，要么保存文件或目录的内容。超级块由一个单独的程序 \indexcode{mkfs} 填充，该程序构建初始文件系统。
 
-The rest of this chapter discusses each layer, starting with the
-buffer cache.
-Look out for situations where well-chosen abstractions at lower layers
-ease the design of higher ones.
+本章的其余部分将从缓冲区缓存开始讨论每一层。请注意较低层中精心选择的抽象如何简化较高层设计的场景。
 %% 
 %%  -------------------------------------------
 %% 
-\section{Buffer cache layer}
+\section{缓冲区缓存层}
 \label{s:bcache}
 
-The buffer cache has two jobs: (1) synchronize access to disk blocks to ensure
-that only one copy of a block is in memory and that only one kernel thread at a time
-uses that copy; (2) cache popular blocks so that they don't need to be re-read from
-the slow disk. The code is in
-\lstinline{bio.c}.
+缓冲区缓存有两个任务：(1) 同步对磁盘块的访问，确保内存中只有一个块的副本，并且每次只有一个内核线程使用该副本；(2) 缓存常用块，这样就不必从慢速磁盘重新读取它们。代码在 \lstinline{bio.c} 中。
 
-The main interface exported by the buffer cache consists of
-\indexcode{bread}
-and
-\indexcode{bwrite};
-the former obtains a
-\indextext{buf}
-containing a copy of a block which can be read or modified in memory, and the
-latter writes a modified buffer to the appropriate block on the disk.
-A kernel thread must release a buffer by calling
-\indexcode{brelse}
-when it is done with it.
-The buffer cache uses a per-buffer sleep-lock to ensure
-that only one thread at a time uses each buffer
-(and thus each disk block);
-\lstinline{bread}
-returns a locked buffer, and
-\lstinline{brelse}
-releases the lock.
+缓冲区缓存导出的主要接口是 \indexcode{bread} 和 \indexcode{bwrite}；前者获取一个包含块副本的 \indextext{buf}，可以在内存中读取或修改，后者将修改后的缓冲区写入磁盘上的相应块。内核线程在使用完缓冲区后必须调用 \indexcode{brelse} 释放它。缓冲区缓存使用每个缓冲区的睡眠锁来确保每次只有一个线程使用每个缓冲区（以及每个磁盘块）；\lstinline{bread} 返回一个已锁定的缓冲区，\lstinline{brelse} 释放锁。
 
-Let's return to the buffer cache.
-The buffer cache has a fixed number of buffers to hold disk blocks,
-which means that if the file system asks for a block that is not
-already in the cache, the buffer cache must recycle a buffer currently
-holding some other block. The buffer cache recycles the
-least recently used buffer for the new block. The assumption is that
-the least recently used buffer is the one least likely to be used
-again soon.
+让我们回到缓冲区缓存。缓冲区缓存有固定数量的缓冲区来保存磁盘块，这意味着如果文件系统请求一个尚未在缓存中的块，缓冲区缓存必须回收当前保存其他某个块的缓冲区。缓冲区缓存为新的块回收最近最少使用的缓冲区。假设是最近最少使用的缓冲区是未来最不可能再次使用的。
 
 \begin{figure}[t]
 \center
 \includegraphics[scale=0.5]{fig/fslayout.pdf}
-\caption{Structure of the xv6 file system. }
+\caption{xv6 文件系统的结构。}
 \label{fig:fslayout}
 \end{figure}
 %% 
 %%  -------------------------------------------
 %% 
-\section{Code: Buffer cache}
+\section{代码：缓冲区缓存}
 
-The buffer cache is a doubly-linked list of buffers.
-The function
-\indexcode{binit},
-called by
-\indexcode{main}
-\lineref{kernel/main.c:/binit/},
-initializes the list with the
-\indexcode{NBUF}
-buffers in the static array
-\lstinline{buf}
-\linerefs{kernel/bio.c:/Create.linked.list/,/^..}/}.
-All other access to the buffer cache refer to the linked list via
-\indexcode{bcache.head},
-not the
-\lstinline{buf}
-array.
+缓冲区缓存是一个双向链表。函数 \indexcode{binit} 由 \indexcode{main} 调用，用静态数组 \lstinline{buf} 中的 \indexcode{NBUF} 个缓冲区初始化链表。对缓冲区缓存的所有其他访问都通过 \indexcode{bcache.head} 引用链表，而不是 \lstinline{buf} 数组。
 
-A buffer has two state fields associated with it.
-The field
-\indexcode{valid}
-indicates that the buffer contains a copy of the block.
-The field \indexcode{disk}
-indicates that the buffer content has been handed to
-the disk, which may change the buffer (e.g., write
-data from the disk into \lstinline{data}).
+一个缓冲区有两个相关的状态字段。字段 \indexcode{valid} 指示缓冲区包含块的副本。字段 \indexcode{disk} 指示缓冲区内容已交给磁盘，磁盘可能更改缓冲区（例如，将数据从磁盘写入 \lstinline{data}）。
 
-\lstinline{bread}
-\lineref{kernel/bio.c:/^bread/}
-calls
-\indexcode{bget}
-to get a buffer for the given sector
-\lineref{kernel/bio.c:/b.=.bget/}.
-If the buffer needs to be read from disk,
-\lstinline{bread}
-calls
-\indexcode{virtio_disk_rw}
-to do that before returning the buffer.
+\lstinline{bread} 调用 \indexcode{bget} 来获取给定扇区的缓冲区。如果缓冲区需要从磁盘读取，\lstinline{bread} 在返回缓冲区之前调用 \indexcode{virtio_disk_rw} 来执行读取。
 
-\lstinline{bget}
-\lineref{kernel/bio.c:/^bget/}
-scans the buffer list for a buffer with the given device and sector numbers
-\linerefs{kernel/bio.c:/Is.the.block.already/,/^..}/}.
-If there is such a buffer,
-\indexcode{bget}
-acquires the sleep-lock for the buffer.
-\lstinline{bget}
-then returns the locked buffer.
+\lstinline{bget} 扫描缓冲区列表，查找具有给定设备和扇区号的缓冲区。如果存在这样的缓冲区，\indexcode{bget} 获取该缓冲区的睡眠锁。\lstinline{bget} 然后返回锁定的缓冲区。
 
-If there is no cached buffer for the given sector,
-\indexcode{bget}
-must make one, possibly reusing a buffer that held
-a different sector.
-It scans the buffer list a second time, looking for a buffer
-that is not in use (\lstinline{b->refcnt = 0});
-any such buffer can be used.
-\lstinline{bget}
-edits the buffer metadata to record the new device and sector number
-and acquires its sleep-lock.
-Note that the assignment
-\lstinline{b->valid = 0}
-ensures that
-\lstinline{bread}
-will read the block data from disk
-rather than incorrectly using the buffer's previous contents.
+如果没有给定扇区的缓存缓冲区，\indexcode{bget} 必须创建一个，可能重用持有不同扇区的缓冲区。它第二次扫描缓冲区列表，寻找一个未使用的缓冲区（\lstinline{b->refcnt = 0}）；任何这样的缓冲区都可以使用。\lstinline{bget} 编辑缓冲区元数据以记录新的设备和扇区号，并获取其睡眠锁。注意赋值 \lstinline{b->valid = 0} 确保 \lstinline{bread} 将从磁盘读取块数据，而不是错误地使用缓冲区以前的内容。
 
-It is important that there is at most one cached buffer per
-disk sector, to ensure that readers see writes, and because the
-file system uses locks on buffers for synchronization.
-\lstinline{bget}
-ensures this invariant by holding the
-\lstinline{bcache.lock}
-continuously from the first loop's check of whether the
-block is cached through the second loop's declaration that
-the block is now cached (by setting
-\lstinline{dev},
-\lstinline{blockno},
-and
-\lstinline{refcnt}).
-This causes the check for a block's presence and (if not
-present) the designation of a buffer to hold the block to
-be atomic.
+每个磁盘扇区最多有一个缓存的缓冲区很重要，以确保读者看到写入，并且因为文件系统使用缓冲区上的锁进行同步。\lstinline{bget} 通过连续持有 \lstinline{bcache.lock} 来保证这个不变性，从第一个循环检查块是否被缓存，一直到第二个循环声明该块现在已被缓存（通过设置 \lstinline{dev}、\lstinline{blockno} 和 \lstinline{refcnt}）。这使得检查块是否存在以及（如果不存在）指定一个缓冲区来保存该块成为原子操作。
 
-It is safe for
-\lstinline{bget}
-to acquire the buffer's sleep-lock outside of the 
-\lstinline{bcache.lock}
-critical section,
-since the non-zero
-\lstinline{b->refcnt}
-prevents the buffer from being re-used for a different disk block.
-The sleep-lock protects reads
-and writes of the block's buffered content, while the
-\lstinline{bcache.lock}
-protects information about which blocks are cached.
+在 \lstinline{bcache.lock} 临界区之外获取缓冲区的睡眠锁是安全的，因为非零的 \lstinline{b->refcnt} 阻止该缓冲区被重用于不同的磁盘块。睡眠锁保护对缓冲区内容的读写，而 \lstinline{bcache.lock} 保护有关哪些块被缓存的信息。
 
-If all the buffers are busy, then too many processes are
-simultaneously executing file system calls;
-\lstinline{bget}
-panics.
-A more graceful response might be to sleep until a buffer became free,
-though there would then be a possibility of deadlock.
+如果所有缓冲区都忙，则意味着太多进程同时执行文件系统调用；\lstinline{bget} 会 panic。更优雅的响应可能是休眠直到有缓冲区可用，但那样可能会产生死锁的可能性。
 
-Once
-\indexcode{bread}
-has read the disk (if needed) and returned the
-buffer to its caller, the caller has
-exclusive use of the buffer and can read or write the data bytes.
-If the caller does modify the buffer, it must call
-\indexcode{bwrite}
-to write the changed data to disk before releasing the buffer.
-\lstinline{bwrite}
-\lineref{kernel/bio.c:/^bwrite/}
-calls
-\indexcode{virtio_disk_rw}
-to talk to the disk hardware.
+一旦 \indexcode{bread} 读取了磁盘（如果需要）并将缓冲区返回给其调用者，调用者就独占了该缓冲区，可以读取或写入数据字节。如果调用者修改了缓冲区，它必须在释放缓冲区之前调用 \indexcode{bwrite} 将更改的数据写入磁盘。\lstinline{bwrite} 调用 \indexcode{virtio_disk_rw} 与磁盘硬件通信。
 
-When the caller is done with a buffer,
-it must call
-\indexcode{brelse}
-to release it. 
-(The name
-\lstinline{brelse},
-a shortening of
-b-release,
-is cryptic but worth learning:
-it originated in Unix and is used in BSD, Linux, and Solaris too.)
-\lstinline{brelse}
-\lineref{kernel/bio.c:/^brelse/}
-releases the sleep-lock and
-moves the buffer
-to the front of the linked list
-\linerefs{kernel/bio.c:/b->next->prev.=.b->prev/,/bcache.head.next.=.b/}.
-Moving the buffer causes the
-list to be ordered by how recently the buffers were used (meaning released):
-the first buffer in the list is the most recently used,
-and the last is the least recently used.
-The two loops in
-\lstinline{bget}
-take advantage of this:
-the scan for an existing buffer must process the entire list
-in the worst case, but checking the most recently used buffers
-first (starting at
-\lstinline{bcache.head}
-and following
-\lstinline{next}
-pointers) will reduce scan time when there is good locality of reference.
-The scan to pick a buffer to reuse picks the least recently used
-buffer by scanning backward
-(following 
-\lstinline{prev}
-pointers).
+当调用者使用完缓冲区后，它必须调用 \indexcode{brelse} 来释放它。（名称 \lstinline{brelse} 是 b-release 的缩写，虽然神秘但值得学习：它起源于 Unix，并在 BSD、Linux 和 Solaris 中使用。）\lstinline{brelse} 释放睡眠锁，并将缓冲区移到链表的前面。移动缓冲区使得链表按缓冲区最近使用（即释放）的顺序排列：链表中的第一个缓冲区是最近使用的，最后一个是最近最少使用的。\lstinline{bget} 中的两个循环利用了这一点：在最坏情况下，查找现有缓冲区的扫描必须处理整个链表，但从最近使用的缓冲区开始检查（从 \lstinline{bcache.head} 开始并跟随 \lstinline{next} 指针）可以在有良好局部性引用时减少扫描时间。选择要重用缓冲区的扫描通过向后扫描（跟随 \lstinline{prev} 指针）来选择最近最少使用的缓冲区。
 %% 
 %%  -------------------------------------------
 %% 
-\section{Logging layer}
+\section{日志层}
 
-One of the most interesting problems in file system design is crash
-recovery. The problem arises because many file-system operations
-involve multiple writes to the disk, and a crash after a subset of the
-writes may leave the on-disk file system in an inconsistent state. For
-example, suppose a crash occurs during file truncation (setting
-the length of a file to zero and freeing its content blocks).
-Depending on the order of the disk writes, the crash 
-may either leave an inode with a reference
-to a content block that is marked free,
-or it may leave an allocated but unreferenced content block.
+文件系统设计中最有趣的问题之一是崩溃恢复。问题的出现是因为许多文件系统操作涉及对磁盘的多次写入，而在一部分写入之后发生的崩溃可能使磁盘上的文件系统处于不一致的状态。例如，假设在文件截断期间（将文件长度设置为零并释放其内容块）发生崩溃。根据磁盘写入的顺序，崩溃可能要么留下一个引用被标记为空闲的内容块的 inode，要么留下一个已分配但未被引用的内容块。
 
-The latter is relatively benign, but an inode that refers to a freed
-block is likely to cause serious problems after a reboot.  After reboot, the
-kernel might allocate that block to another file, and now we have two different
-files pointing unintentionally to the same block.  If xv6 supported
-multiple users, this situation could be a security problem, since the
-old file's owner would be able to read and write blocks in the
-new file, owned by a different user.
+后者相对无害，但引用已释放块的 inode 很可能在重启后引起严重问题。重启后，内核可能会将该块分配给另一个文件，现在我们有两个不同的文件无意中指向同一个块。如果 xv6 支持多用户，这种情况可能是一个安全问题，因为旧文件的所有者将能够读写新文件中的块，而新文件属于另一个用户。
 
-Xv6 solves the problem of crashes during file-system operations with a
-simple form of logging. An xv6 system call does not directly write
-the on-disk file system data structures. Instead, it places a
-description of all the disk writes it wishes to make in a 
-\indextext{log} 
-on the disk. Once the system call has logged all of its writes, it writes a
-special 
-\indextext{commit}
-record to the disk indicating that the log contains
-a complete operation. At that point the system call copies the writes
-to the on-disk file system data structures. After those writes have
-completed, the system call erases the log on disk.
+Xv6 用一种简单的日志形式解决了文件系统操作期间崩溃的问题。一个 xv6 系统调用不会直接写入磁盘上的文件系统数据结构。相反，它将它希望执行的所有磁盘写入的描述放在磁盘上的一个日志中。一旦系统调用记录了其所有写入，它就会在磁盘上写入一个特殊的提交记录，指示日志包含一个完整的操作。此时，系统调用将写入复制到磁盘上的文件系统数据结构。在这些写入完成后，系统调用会擦除磁盘上的日志。
 
-If the system should crash and reboot, the file-system code recovers
-from the crash as follows, before running any processes. If the log is
-marked as containing a complete operation, then the recovery code
-copies the writes to where they belong in the on-disk file system. If
-the log is not marked as containing a complete operation, the recovery
-code ignores the log.  The recovery code finishes by erasing
-the log.
+如果系统崩溃并重新启动，文件系统代码在运行任何进程之前会按如下方式从崩溃中恢复。如果日志被标记为包含完整的操作，则恢复代码将写入复制到磁盘上文件系统中它们所属的位置。如果日志未被标记为包含完整的操作，则恢复代码忽略该日志。恢复代码最后擦除日志。
 
-Why does xv6's log solve the problem of crashes during file system
-operations? If the crash occurs before the operation commits, then the
-log on disk will not be marked as complete, the recovery code will
-ignore it, and the state of the disk will be as if the operation had
-not even started. If the crash occurs after the operation commits,
-then recovery will replay all of the operation's writes, perhaps
-repeating them if the operation had started to write them to the
-on-disk data structure. In either case, the log makes operations
-atomic with respect to crashes: after recovery, either all of the
-operation's writes appear on the disk, or none of them appear.
+为什么 xv6 的日志解决了文件系统操作期间的崩溃问题？如果在操作提交之前发生崩溃，则磁盘上的日志不会被标记为完成，恢复代码将忽略它，磁盘的状态就像操作从未开始一样。如果在操作提交之后发生崩溃，则恢复将重放该操作的所有写入，即使操作已经开始将它们写入磁盘上的数据结构，也可能会重复它们。无论哪种情况，日志都使操作在崩溃方面具有原子性：恢复后，操作的所有写入要么都出现在磁盘上，要么都不出现。
 %% 
 %% 
 %% 
-\section{Log design}
+\section{日志设计}
 
-The log resides at a known fixed location, specified in the superblock.
-It consists of a header block followed by a sequence
-of updated block copies (``logged blocks'').
-The header block contains an array of sector
-numbers, one for each of the logged blocks, and 
-the count of log blocks.
-The count in the header block on disk is either
-zero, indicating that there is no transaction in the log,
-or non-zero, indicating that the log contains a complete committed
-transaction with the indicated number of logged blocks.
-Xv6 writes the header
-block when a transaction commits, but not before, and sets the
-count to zero after copying the logged blocks to the file system.
-Thus a crash midway through a transaction will result in a
-count of zero in the log's header block; a crash after a commit
-will result in a non-zero count.
+日志位于超级块中指定的已知固定位置。它由一个头块和一系列更新的块副本组成。头块包含一个扇区号数组，每个日志块对应一个，以及日志块的数量。磁盘上头块中的计数要么为零，表示日志中没有事务，要么为非零，表示日志包含一个完整的已提交事务，其中包含指定数量的日志块。Xv6 在事务提交时写入头块，但在此之前不写入，并在将日志块复制到文件系统后将计数设置为零。因此，在事务中途发生的崩溃将导致日志头块中的计数为零；提交后发生的崩溃将导致非零计数。
 
-Each system call's code indicates the start and end of the sequence of
-writes that must be atomic with respect to crashes.
-To allow concurrent execution of file-system operations
-by different processes,
-the logging system can accumulate the writes
-of multiple system calls into one transaction.
-Thus a single commit may involve the writes of multiple
-complete system calls.
-To avoid splitting a system call across transactions, the logging system
-only commits when no file-system system calls are underway.
+每个系统调用的代码指示必须原子性应对崩溃的写入序列的开始和结束。为了允许不同进程并发执行文件系统操作，日志系统可以将多个系统调用的写入累积到一个事务中。因此，单个提交可能涉及多个完整系统调用的写入。为了避免将系统调用拆分到多个事务中，日志系统仅在没有文件系统系统调用正在进行时才提交。
 
-The idea of committing several transactions together is known as 
-\indextext{group commit}.
-Group commit reduces the number of disk operations
-because it amortizes the fixed cost of a commit over multiple
-operations.
-Group commit also hands the disk system more concurrent writes
-at the same time, perhaps allowing the disk to write
-them all during a single disk rotation.
-Xv6's virtio driver doesn't support this kind of
-\indextext{batching},
-but xv6's file system design allows for it.
+将多个事务一起提交的想法称为组提交。组提交减少了磁盘操作的数量，因为它将提交的固定成本分摊到多个操作上。组提交还可以同时向磁盘系统提供更多并发写入，或许允许磁盘在单次磁盘旋转期间将它们全部写入。Xv6 的 virtio 驱动程序不支持这种批处理，但 xv6 的文件系统设计允许它。
 
-Xv6 dedicates a fixed amount of space on the disk to hold the log.
-The total number of blocks written by the system calls in a
-transaction must fit in that space.
-This has two consequences.
-No single system call
-can be allowed to write more distinct blocks than there is space
-in the log. This is not a problem for most system calls, but two
-of them can potentially write many blocks: 
-\indexcode{write}
-and
-\indexcode{unlink}.
-A large file write may write many data blocks and many bitmap blocks
-as well as an inode block; unlinking a large file might write many
-bitmap blocks and an inode.
-Xv6's write system call breaks up large writes into multiple smaller
-writes that fit in the log,
-and 
-\lstinline{unlink}
-doesn't cause problems because in practice the xv6 file system uses
-only one bitmap block.
-The other consequence of limited log space
-is that the logging system cannot allow a system call to start
-unless it is certain that the system call's writes will
-fit in the space remaining in the log.
+Xv6 在磁盘上预留固定大小的空间来保存日志。事务中系统调用写入的块总数必须适合该空间。这有两个后果。不允许任何单个系统调用写入的不同的块数超过日志中的空间。这对于大多数系统调用来说不是问题，但其中两个调用可能写入许多块：\indexcode{write} 和 \indexcode{unlink}。大文件写入可能写入许多数据块和许多位图块以及一个 inode 块；取消链接一个大文件可能写入许多位图块和一个 inode。Xv6 的 write 系统调用将大的写入分解为多个适合日志的较小写入，而 \lstinline{unlink} 不会引起问题，因为实际上 xv6 文件系统只使用一个位图块。有限日志空间的另一个后果是，日志系统不能允许系统调用启动，除非确定该调用的写入将适合日志中剩余的空间。
 %% 
 %% 
 %% 
-\section{Code: logging}
+\section{代码：日志记录}
 
-A typical use of the log in a system call looks like this:
+系统调用中日志的典型用法如下所示：
 \begin{lstlisting}[]
   begin_op();
   ...
@@ -464,94 +127,15 @@ A typical use of the log in a system call looks like this:
   end_op();
 \end{lstlisting}
 
-\indexcode{begin_op}
-\lineref{kernel/log.c:/^begin.op/}
-waits until
-the logging system is not currently committing, and until
-there is enough unreserved log space to hold
-the writes from this call.
-\lstinline{log.outstanding}
-counts the number of system calls that have reserved log
-space; the total reserved space is 
-\lstinline{log.outstanding}
-times
-\lstinline{MAXOPBLOCKS}.
-Incrementing
-\lstinline{log.outstanding}
-both reserves space and prevents a commit
-from occurring during this system call.
-The code conservatively assumes that each system call might write up to
-\lstinline{MAXOPBLOCKS}
-distinct blocks.
+\indexcode{begin_op} 等待直到日志系统当前不在提交，并且有足够的未预留日志空间来容纳此次调用的写入。\lstinline{log.outstanding} 统计已预留日志空间的系统调用数量；总预留空间是 \lstinline{log.outstanding} 乘以 \lstinline{MAXOPBLOCKS}。增加 \lstinline{log.outstanding} 既预留了空间，又阻止了在此系统调用期间发生提交。代码保守地假设每个系统调用可能写入最多 \lstinline{MAXOPBLOCKS} 个不同的块。
 
-\indexcode{log_write}
-\lineref{kernel/log.c:/^log.write/}
-acts as a proxy for 
-\indexcode{bwrite}.
-It records the block's sector number in memory,
-reserving it a slot in the log on disk,
-and pins the buffer in the block cache
-to prevent the block cache from evicting it.
-The block must stay in the cache until committed:
-until then, the cached copy is the only record
-of the modification; it cannot be written to
-its place on disk until after commit;
-and other reads in the same transaction must
-see the modifications.
-\lstinline{log_write}
-notices when a block is written multiple times during a single
-transaction, and allocates that block the same slot in the log.
-This optimization is often called
-\indextext{absorption}.
-It is common that, for example, the disk block containing inodes
-of several files is written several times within a transaction.  By absorbing
-several disk writes into one, the file system can save log space and
-can achieve better performance because only one copy of the disk block must be
-written to disk.
+\indexcode{log_write} 充当 \indexcode{bwrite} 的代理。它记录块的扇区号在内存中，在磁盘上的日志中为其预留一个槽位，并将缓冲区固定在块缓存中，以防止块缓存将其驱逐。该块必须保留在缓存中直到提交：在此之前，缓存副本是修改的唯一记录；在提交之后才能将其写入磁盘上的位置；并且同一事务中的其他读取必须看到修改。\lstinline{log_write} 会注意到在单个事务中多次写入一个块的情况，并为该块分配日志中相同的槽位。这种优化通常称为吸收。例如，在单个事务中多次写入包含多个文件 inode 的磁盘块是很常见的。通过将多次磁盘写入吸收为一次，文件系统可以节省日志空间并获得更好的性能，因为磁盘块只需写入磁盘一次。
 
-\indexcode{end_op}
-\lineref{kernel/log.c:/^end.op/}
-first decrements the count of outstanding system calls.
-If the count is now zero, it commits the current
-transaction by calling
-\lstinline{commit().}
-There are four stages in this process.
-\lstinline{write_log()}
-\lineref{kernel/log.c:/^write.log/}
-copies each block modified in the transaction from the buffer
-cache to its slot in the log on disk.
-\lstinline{write_head()}
-\lineref{kernel/log.c:/^write.head/}
-writes the header block to disk: this is the
-commit point, and a crash after the write will
-result in recovery replaying the transaction's writes from the log.
-\indexcode{install_trans}
-\lineref{kernel/log.c:/^install_trans/}
-reads each block from the log and writes it to the proper
-place in the file system.
-Finally
-\lstinline{end_op}
-writes the log header with a count of zero;
-this has to happen before the next transaction starts writing
-logged blocks, so that a crash doesn't result in recovery
-using one transaction's header with the subsequent transaction's
-logged blocks.
+\indexcode{end_op} 首先减少未完成的系统调用计数。如果计数现在为零，它通过调用 \lstinline{commit()} 提交当前事务。这个过程有四个阶段。\lstinline{write_log()} 将事务中修改的每个块从缓冲区缓存复制到磁盘上日志中其对应的槽位。\lstinline{write_head()} 将头块写入磁盘：这是提交点，此写入之后的崩溃将导致恢复从日志中重放事务的写入。\indexcode{install_trans} 从日志中读取每个块并将其写入文件系统中的正确位置。最后，\lstinline{end_op} 写入一个计数为零的日志头；这必须在下一个事务开始写入日志块之前完成，这样崩溃就不会导致恢复将一个事务的头与后续事务的日志块一起使用。
 
-\indexcode{recover_from_log}
-\lineref{kernel/log.c:/^recover_from_log/}
-is called from 
-\indexcode{initlog}
-\lineref{kernel/log.c:/^initlog/},
-which is called from \indexcode{fsinit}\lineref{kernel/fs.c:/^fsinit/} during boot before the first user process runs
-\lineref{kernel/proc.c:/fsinit/}.
-It reads the log header, and mimics the actions of
-\lstinline{end_op}
-if the header indicates that the log contains a committed transaction.
+\indexcode{recover_from_log} 从 \indexcode{initlog} 调用，而 \indexcode{initlog} 在引导期间，第一个用户进程运行之前，从 \indexcode{fsinit} 调用。它读取日志头，如果头指示日志包含一个已提交的事务，则模拟 \lstinline{end_op} 的操作。
 
-An example use of the log occurs in 
-\indexcode{filewrite}
-\lineref{kernel/file.c:/^filewrite/}.
-The transaction looks like this:
+日志的一个示例用法出现在 \indexcode{filewrite} 中。事务如下所示：
 \begin{lstlisting}[]
       begin_op();
       ilock(f->ip);
@@ -559,1261 +143,192 @@ The transaction looks like this:
       iunlock(f->ip);
       end_op();
 \end{lstlisting}
-This code is wrapped in a loop that breaks up large writes into individual
-transactions of just a few sectors at a time, to avoid overflowing
-the log.  The call to
-\indexcode{writei}
-writes many blocks as part of this
-transaction: the file's inode, one or more bitmap blocks, and some data
-blocks.
+此代码被包装在一个循环中，该循环将大的写入分解为每次仅几个扇区的单个事务，以避免溢出日志。调用 \indexcode{writei} 会在此事务中写入许多块：文件的 inode、一个或多个位图块以及一些数据块。
 %% 
 %% 
 %% 
-\section{Code: Block allocator}
+\section{代码：块分配器}
 
-File and directory content is stored in disk blocks,
-which must be allocated from a free pool.
-Xv6's block allocator
-maintains a free bitmap on disk, with one bit per block. 
-A zero bit indicates that the corresponding block is free;
-a one bit indicates that it is in use.
-The program
-\lstinline{mkfs}
-sets the bits corresponding to the boot sector, superblock, log blocks, inode
-blocks, and bitmap blocks.
+文件和目录内容存储在磁盘块中，这些块必须从空闲池中分配。Xv6 的块分配器在磁盘上维护一个空闲位图，每个块对应一个位。零位表示对应的块是空闲的；一位表示它正在使用中。程序 \lstinline{mkfs} 设置与引导扇区、超级块、日志块、inode 块和位图块相对应的位。
 
-The block allocator provides two functions:
-\indexcode{balloc}
-allocates a new disk block, and
-\indexcode{bfree}
-frees a block.
-\lstinline{balloc}
-The loop in
-\lstinline{balloc}
-at
-\lineref{kernel/fs.c:/^..for.b.=.0/}
-considers every block, starting at block 0 up to 
-\lstinline{sb.size},
-the number of blocks in the file system.
-It looks for a block whose bitmap bit is zero,
-indicating that it is free.
-If
-\lstinline{balloc}
-finds such a block, it updates the bitmap 
-and returns the block.
-For efficiency, the loop is split into two 
-pieces.
-The outer loop reads each block of bitmap bits.
-The inner loop checks all 
-Bits-Per-Block (\lstinline{BPB})
-bits in a single bitmap block.
-The race that might occur if two processes try to allocate
-a block at the same time is prevented by the fact that
-the buffer cache only lets one process use any one bitmap block at a time.
+块分配器提供两个函数：\indexcode{balloc} 分配一个新的磁盘块，\indexcode{bfree} 释放一个块。在 \lstinline{balloc} 中，从块 0 到 \lstinline{sb.size}（文件系统中的块数）循环考虑每个块。它寻找位图位为零的块，表示它是空闲的。如果 \lstinline{balloc} 找到这样的块，它更新位图并返回该块。为了提高效率，循环被分成两部分。外层循环读取每个位图块。内层循环检查单个位图块中的所有每块位数 (\lstinline{BPB})。如果两个进程同时尝试分配一个块可能发生的竞争，由于缓冲区缓存一次只允许一个进程使用任何一个位图块，因此被阻止。
 
-\lstinline{bfree}
-\lineref{kernel/fs.c:/^bfree/}
-finds the right bitmap block and clears the right bit.
-Again the exclusive use implied by
-\lstinline{bread}
-and
-\lstinline{brelse}
-avoids the need for explicit locking.
+\lstinline{bfree} 找到正确的位图块并清除正确的位。同样，\lstinline{bread} 和 \lstinline{brelse} 所隐含的独占使用避免了显式锁定的需要。
 
-As with much of the code described in the remainder of this chapter, 
-\lstinline{balloc}
-and
-\lstinline{bfree}
-must be called inside a transaction.
+与本章其余部分描述的大部分代码一样，\lstinline{balloc} 和 \lstinline{bfree} 必须在事务内部调用。
 %% 
 %%  -------------------------------------------
 %% 
-\section{Inode layer}
+\section{Inode 层}
 
-The term 
-\indextext{inode} 
-can have one of two related meanings.
-It might refer to the on-disk data structure containing
-a file's size and list of data block numbers.
-Or ``inode'' might refer to an in-memory inode, which contains
-a copy of the on-disk inode as well as extra information needed
-within the kernel.
+术语 inode 可以有两个相关的含义。它可能指的是磁盘上的数据结构，包含文件的大小和数据块编号列表。或者，“inode”可能指的是内存中的 inode，它包含磁盘上 inode 的副本以及内核中需要的额外信息。
 
-The on-disk inodes
-are packed into a contiguous area
-of disk called the inode blocks.
-Every inode is the same size, so it is easy, given a
-number n, to find the nth inode on the disk.
-In fact, this number n, called the inode number or i-number,
-is how inodes are identified in the implementation.
+磁盘上的 inode 被压缩在磁盘上一个称为 inode 块的连续区域中。每个 inode 大小相同，因此给定一个数字 n，很容易找到磁盘上的第 n 个 inode。实际上，这个数字 n 被称为 inode 编号或 i-number，是实现在标识 inode 的方式。
 
-The on-disk inode is defined by a
-\indexcode{struct dinode}
-\lineref{kernel/fs.h:/^struct.dinode/}.
-The 
-\lstinline{type}
-field distinguishes between files, directories, and special
-files (devices).
-A type of zero indicates that an on-disk inode is free.
-The
-\lstinline{nlink}
-field counts the number of directory entries that
-refer to this inode, in order to recognize when the
-on-disk inode and its data blocks should be freed.
-The
-\lstinline{size}
-field records the number of bytes of content in the file.
-The
-\lstinline{addrs}
-array records the block numbers of the disk blocks holding
-the file's content.
+磁盘上的 inode 由 \indexcode{struct dinode} 定义。\lstinline{type} 字段区分文件、目录和特殊文件（设备）。类型为零表示磁盘上的 inode 是空闲的。\lstinline{nlink} 字段统计引用此 inode 的目录项数量，以便识别何时应释放磁盘上的 inode 及其数据块。\lstinline{size} 字段记录文件内容的字节数。\lstinline{addrs} 数组记录保存文件内容的磁盘块的块号。
 
-The kernel keeps the set of active inodes in memory
-in a table called \indexcode{itable};
-\indexcode{struct inode}
-\lineref{kernel/file.h:/^struct.inode/}
-is the in-memory copy of a 
-\lstinline{struct}
-\lstinline{dinode}
-on disk.
-The kernel stores an inode in memory only if there are
-C pointers referring to that inode. The
-\lstinline{ref}
-field counts the number of C pointers referring to the
-in-memory inode, and the kernel discards the inode from
-memory if the reference count drops to zero.
-The
-\indexcode{iget}
-and
-\indexcode{iput}
-functions acquire and release pointers to an inode,
-modifying the reference count.
-Pointers to an inode can come from file descriptors,
-current working directories, and transient kernel code
-such as
-\lstinline{kexec}.
+内核将一组活动 inode 保存在内存中一个称为 \indexcode{itable} 的表中；\indexcode{struct inode} 是磁盘上 \lstinline{struct dinode} 的内存副本。仅当有 C 指针引用该 inode 时，内核才将 inode 存储在内存中。\lstinline{ref} 字段统计引用内存中 inode 的 C 指针数量，如果引用计数降至零，内核将从内存中丢弃该 inode。\indexcode{iget} 和 \indexcode{iput} 函数获取和释放指向 inode 的指针，修改引用计数。指向 inode 的指针可以来自文件描述符、当前工作目录和瞬态内核代码，例如 \lstinline{kexec}。
 
-There are four lock or lock-like mechanisms in xv6's
-inode code.
-\lstinline{itable.lock}
-protects the invariant that an inode is present in the inode table
-at most once, and the invariant that an in-memory inode's
-\lstinline{ref}
-field counts the number of in-memory pointers to the inode.
-Each in-memory inode has a
-\lstinline{lock}
-field containing a
-sleep-lock, which ensures exclusive access to the
-inode's fields (such as file length) as well as to the
-inode's file or directory content blocks.
-An inode's
-\lstinline{ref},
-if it is greater than zero, causes the system to maintain
-the inode in the table, and not re-use the table entry for
-a different inode.
-Finally, each inode contains a
-\lstinline{nlink}
-field (on disk and copied in memory if in memory) that
-counts the number of directory entries that refer to a file;
-xv6 won't free an inode if its link count is greater than zero.
+在 xv6 的 inode 代码中有四种锁或类似锁的机制。\lstinline{itable.lock} 保护不变性：inode 在 inode 表中最多出现一次，以及内存中 inode 的 \lstinline{ref} 字段统计指向该 inode 的内存中指针数量。每个内存中的 inode 有一个包含睡眠锁的 \lstinline{lock} 字段，它确保对 inode 字段（如文件长度）以及 inode 的文件或目录内容块的独占访问。inode 的 \lstinline{ref} 如果大于零，会导致系统将该 inode 保留在表中，并且不将表项重用于不同的 inode。最后，每个 inode 包含一个 \lstinline{nlink} 字段（在磁盘上，如果在内存中则复制到内存中），它统计引用文件的目录项数量；如果链接计数大于零，xv6 不会释放 inode。
 
-A
-\lstinline{struct}
-\lstinline{inode}
-pointer returned by
-\lstinline{iget()}
-is guaranteed to be valid until the corresponding call to
-\lstinline{iput()};
-the inode won't be deleted, and the memory referred to
-by the pointer won't be re-used for a different inode.
-\lstinline{iget()}
-provides non-exclusive access to an inode, so that
-there can be many pointers to the same inode.
-Many parts of the file-system code depend on this behavior of
-\lstinline{iget()},
-both to hold long-term references to inodes (as open files
-and current directories) and to prevent races while avoiding
-deadlock in code that manipulates multiple inodes (such as
-pathname lookup).
+由 \lstinline{iget()} 返回的 \lstinline{struct inode} 指针保证在相应调用 \lstinline{iput()} 之前有效；inode 不会被删除，并且指针引用的内存不会重用于不同的 inode。\lstinline{iget()} 提供对 inode 的非独占访问，因此可以有许多指针指向同一个 inode。文件系统代码的许多部分依赖于 \lstinline{iget()} 的这种行为，既用于持有对 inode 的长期引用（如打开的文件和当前目录），也用于在操作多个 inode 的代码中（如路径名查找）防止竞争并避免死锁。
 
-The
-\lstinline{struct}
-\lstinline{inode}
-that 
-\lstinline{iget}
-returns may not have any useful content.
-In order to ensure it holds a copy of the on-disk
-inode, code must call
-\indexcode{ilock}.
-This locks the inode (so that no other process can
-\lstinline{ilock}
-it) and reads the inode from the disk,
-if it has not already been read.
-\lstinline{iunlock}
-releases the lock on the inode.
-Separating acquisition of inode pointers from locking
-helps avoid deadlock in some situations, for example during
-directory lookup.
-Multiple processes can hold a C pointer to an inode
-returned by 
-\lstinline{iget},
-but only one process can lock the inode at a time.
+\lstinline{iget} 返回的 \lstinline{struct inode} 可能没有任何有用的内容。为了确保它包含磁盘上 inode 的副本，代码必须调用 \indexcode{ilock}。这会锁定 inode（因此没有其他进程可以 \lstinline{ilock} 它），并且如果尚未读取，则从磁盘读取 inode。\lstinline{iunlock} 释放 inode 上的锁。将获取 inode 指针与锁定分开有助于在某些情况下避免死锁，例如在目录查找期间。多个进程可以持有由 \lstinline{iget} 返回的指向 inode 的 C 指针，但一次只有一个进程可以锁定该 inode。
 
-The inode table only stores inodes to which kernel code
-or data structures hold C pointers.
-Its main job is synchronizing access by multiple processes.
-The inode table also happens to cache frequently-used inodes, but
-caching is secondary; if an inode is used frequently, the buffer cache will probably
-keep it in memory.
-Code that modifies an in-memory inode writes it to disk with
-\lstinline{iupdate}.
+inode 表只存储内核代码或数据结构持有 C 指针的 inode。它的主要工作是同步多个进程的访问。inode 表也恰好缓存了频繁使用的 inode，但缓存是次要的；如果一个 inode 被频繁使用，缓冲区缓存很可能会将其保存在内存中。修改内存中 inode 的代码使用 \lstinline{iupdate} 将其写入磁盘。
 
 %% 
 %%  -------------------------------------------
 %% 
-\section{Code: Inodes}
+\section{代码：Inodes}
 
-To allocate a new inode (for example, when creating a file),
-xv6 calls
-\indexcode{ialloc}
-\lineref{kernel/fs.c:/^ialloc/}.
-\lstinline{ialloc}
-is similar to
-\indexcode{balloc}:
-it loops over the inode structures on the disk, one block at a time,
-looking for one that is marked free.
-When it finds one, it claims it by writing the new 
-\lstinline{type}
-to the disk and then returns an entry from the inode table
-with the tail call to 
-\indexcode{iget}
-\lineref{kernel/fs.c:/return.iget\(dev..inum\)/}.
-The correct operation of
-\lstinline{ialloc}
-depends on the fact that only one process at a time
-can be holding a reference to 
-\lstinline{bp}:
-\lstinline{ialloc}
-can be sure that some other process does not
-simultaneously see that the inode is available
-and try to claim it.
+为了分配一个新的 inode（例如，在创建文件时），xv6 调用 \indexcode{ialloc}。\lstinline{ialloc} 类似于 \indexcode{balloc}：它循环遍历磁盘上的 inode 结构，一次一个块，寻找标记为空闲的 inode。当找到一个时，它通过将新的 \lstinline{type} 写入磁盘来声明它，然后通过尾部调用 \indexcode{iget} 从 inode 表返回一个条目。\lstinline{ialloc} 的正确操作依赖于这样一个事实：一次只能有一个进程持有对 \lstinline{bp} 的引用：\lstinline{ialloc} 可以确信没有其他进程同时看到该 inode 可用并试图声明它。
 
-\lstinline{iget}
-\lineref{kernel/fs.c:/^iget/}
-looks through the inode table for an active entry (\lstinline{ip->ref}
-\lstinline{>}
-\lstinline{0})
-with the desired device and inode number.
-If it finds one, it returns a new reference to that inode
-\linerefs{kernel/fs.c:/^....if.ip->ref.>.0/,/^....}/}.
-As
-\indexcode{iget}
-scans, it records the position of the first empty slot
-\linerefs{kernel/fs.c:/^....if.empty.==.0/,/empty.=.ip/},
-which it uses if it needs to allocate a table entry.
+\lstinline{iget} 在 inode 表中查找具有所需设备和 inode 编号的活动条目（\lstinline{ip->ref > 0}）。如果找到，它返回对该 inode 的新引用。当 \indexcode{iget} 扫描时，它记录第一个空槽的位置，如果它需要分配一个表项，则使用该空槽。
 
-Code must lock the inode using
-\indexcode{ilock}
-before reading or writing its metadata or content.
-\lstinline{ilock}
-\lineref{kernel/fs.c:/^ilock/}
-uses a sleep-lock for this purpose.
-Once
-\indexcode{ilock}
-has exclusive access to the inode, it reads the inode
-from disk (more likely, the buffer cache) if needed.
-The function
-\indexcode{iunlock}
-\lineref{kernel/fs.c:/^iunlock/}
-releases the sleep-lock,
-which may cause any processes sleeping
-to be woken up.
+代码必须在读取或写入其元数据或内容之前使用 \indexcode{ilock} 锁定 inode。\lstinline{ilock} 为此目的使用睡眠锁。一旦 \indexcode{ilock} 独占访问 inode，如果需要，它会从磁盘（更可能从缓冲区缓存）读取 inode。函数 \indexcode{iunlock} 释放睡眠锁，这可能会唤醒任何正在休眠的进程。
 
-\lstinline{iput}
-\lineref{kernel/fs.c:/^iput/}
-releases a C pointer to an inode
-by decrementing the reference count
-\lineref{kernel/fs.c:/^..ip->ref--/}.
-If this is the last reference, the inode's
-slot in the inode table is now free and can be re-used
-for a different inode.
+\lstinline{iput} 通过递减引用计数来释放指向 inode 的 C 指针。如果这是最后一个引用，inode 表中该 inode 的槽位现在空闲，可以重用于不同的 inode。
 
-If 
-\indexcode{iput}
-sees that there are no C pointer references to an inode
-and that the inode has no links to it (occurs in no
-directory), then the inode and its data blocks must
-be freed.
-\lstinline{iput}
-calls
-\indexcode{itrunc}
-to truncate the file to zero bytes, freeing the data blocks;
-sets the inode type to 0 (unallocated);
-and writes the inode to disk
-\lineref{kernel/fs.c:/inode.has.no.links.and/}.
+如果 \indexcode{iput} 发现没有 C 指针引用一个 inode，并且该 inode 没有指向它的链接（不在任何目录中），那么该 inode 及其数据块必须被释放。\lstinline{iput} 调用 \indexcode{itrunc} 将文件截断为零字节，释放数据块；将 inode 类型设置为 0（未分配）；并将 inode 写入磁盘。
 
-The locking protocol in 
-\indexcode{iput}
-in the case in which it frees the inode deserves a closer look.
-One danger is that a concurrent thread might be waiting in
-\lstinline{ilock}
-to use this inode (e.g., to read a file or list a directory),
-and won't be prepared to find that the inode is no longer
-allocated. This can't happen because there is no way for
-a system call to get a pointer to an in-memory inode if it has
-no links to it and 
-\lstinline{ip->ref}
-is one. That one reference is the reference owned by the
-thread calling
-\lstinline{iput}.
-The other main danger is that a concurrent call to
-\lstinline{ialloc}
-might choose the same inode that
-\lstinline{iput}
-is freeing.
-This can happen only after the
-\lstinline{iupdate}
-writes the disk so that the inode has type zero.
-This race is benign; the allocating thread will politely wait
-to acquire the inode's sleep-lock before reading or writing
-the inode, at which point
-\lstinline{iput}
-is done with it.
+在释放 inode 的情况下，\indexcode{iput} 中的锁定协议值得仔细研究。一个危险是，并发的线程可能正在 \lstinline{ilock} 中等待使用这个 inode（例如，读取文件或列出目录），并且不会准备好发现 inode 不再被分配。这不可能发生，因为如果 inode 没有指向它的链接并且 \lstinline{ip->ref} 为 1，系统调用无法获得指向内存中 inode 的指针。那一个引用是调用 \lstinline{iput} 的线程拥有的引用。另一个主要危险是，对 \lstinline{ialloc} 的并发调用可能选择与 \lstinline{iput} 正在释放的相同的 inode。这只有在 \lstinline{iupdate} 写入磁盘使得 inode 类型为零之后才可能发生。这种竞争是良性的；分配线程会在读取或写入 inode 之前礼貌地等待获取 inode 的睡眠锁，而此时 \lstinline{iput} 已经完成了对该 inode 的操作。
 
-\lstinline{iput()}
-can write to the disk.  This means that any system call that uses the file
-system may write to the disk, because the system call may be the last one having
-a reference to the file. Even calls like
-\lstinline{read()}
-that appear to be read-only, may end up calling
-\lstinline{iput().}
-This, in turn, means that even read-only system calls
-must be wrapped in transactions if they use the file system.
+\lstinline{iput()} 可以写入磁盘。这意味着任何使用文件系统的系统调用都可能写入磁盘，因为该系统调用可能是最后一个引用该文件的调用。即使是像 \lstinline{read()} 这样看似只读的调用，最终也可能调用 \lstinline{iput()}。这反过来意味着，即使是只读的系统调用，如果它们使用文件系统，也必须包装在事务中。
 
-There is a challenging interaction between
-\lstinline{iput()}
-and crashes.
-\lstinline{iput()}
-doesn't truncate a file immediately when the link count for the file
-drops to zero, because some process might still hold a reference to the inode in
-memory: a process might still be reading and writing to the file, because it
-successfully opened it. But, if a crash happens before the last process closes
-the file descriptor for the file, then the file will be marked allocated on disk
-but no directory entry will point to it.
+\lstinline{iput()} 和崩溃之间存在一个具有挑战性的交互。当文件的链接计数降至零时，\lstinline{iput()} 不会立即截断文件，因为某个进程可能仍然在内存中持有对该 inode 的引用：一个进程可能因为成功打开了文件而仍在读取和写入它。但是，如果在最后一个进程关闭该文件的文件描述符之前发生崩溃，那么该文件在磁盘上将被标记为已分配，但没有目录项指向它。
 
-File systems handle this case in one of two ways. The simple solution is that on
-recovery, after reboot, the file system scans the whole file system for files
-that are marked allocated, but have no directory entry pointing to them.  If any
-such file exists, then it can free those files.
+文件系统通过两种方式之一处理这种情况。简单的解决方案是，在恢复时，重启后，文件系统扫描整个文件系统，查找标记为已分配但没有目录项指向它们的文件。如果存在任何此类文件，则可以释放这些文件。
 
-The second solution doesn't require scanning the file system.  In this solution,
-the file system records on disk (e.g., in the super block) the inode inumber of
-a file whose link count drops to zero but whose reference count isn't zero.  If
-the file system removes the file when its reference count reaches 0, then it
-updates the on-disk list by removing that inode from the list. On recovery, the
-file system frees any file in the list.
+第二种解决方案不需要扫描文件系统。在这种解决方案中，文件系统在磁盘上（例如，在超级块中）记录链接计数降至零但引用计数不为零的文件的 inode 编号。如果文件系统在其引用计数达到 0 时删除该文件，则通过从列表中删除该 inode 来更新磁盘上的列表。恢复时，文件系统释放列表中的任何文件。
 
-Xv6 implements neither solution, which means that inodes may be marked allocated
-on disk, even though they are not in use anymore.  This means that over time xv6
-runs the risk that it may run out of disk space.
+Xv6 两种解决方案都没有实现，这意味着 inode 可能在磁盘上被标记为已分配，即使它们不再使用。这意味着随着时间的推移，xv6 面临可能耗尽磁盘空间的风险。
 %% 
 %% 
 %% 
-\section{Code: Inode content}
+\section{代码：Inode 内容}
 
 \begin{figure}[t]
 \center
 \includegraphics[scale=0.5]{fig/inode.pdf}
-\caption{The representation of a file on disk.}
+\caption{文件在磁盘上的表示。}
 \label{fig:inode}
 \end{figure}
 
-The on-disk inode structure,
-\indexcode{struct dinode},
-contains a size and an array of block numbers (see 
-Figure~\ref{fig:inode}).
-The inode data is found in the blocks listed
-in the
-\lstinline{dinode} 's
-\lstinline{addrs}
-array.
-The first
-\indexcode{NDIRECT}
-blocks of data are listed in the first
-\lstinline{NDIRECT}
-entries in the array; these blocks are called 
-\indextext{direct blocks}.
-The next 
-\indexcode{NINDIRECT}
-blocks of data are listed not in the inode
-but in a data block called the
-\indextext{indirect block}.
-The last entry in the
-\lstinline{addrs}
-array gives the address of the indirect block.
-Thus the first 12 kB (
-\lstinline{NDIRECT} 
-\lstinline{x}
-\indexcode{BSIZE})
-bytes of a file can be loaded from blocks listed in the inode,
-while the next
-\lstinline{256} kB (
-\lstinline{NINDIRECT}
-\lstinline{x}
-\lstinline{BSIZE})
-bytes can only be loaded after consulting the indirect block.
-This is a good on-disk representation but a 
-complex one for clients.
-The function
-\indexcode{bmap}
-manages the representation so that higher-level routines, such as
-\indexcode{readi}
-and
-\indexcode{writei},
-which we will see shortly, do not need to manage this complexity.
-\lstinline{bmap}
-returns the disk block number of the
-\lstinline{bn}'th
-data block for the inode
-\lstinline{ip}.
-If
-\lstinline{ip}
-does not have such a block yet,
-\lstinline{bmap}
-allocates one.
+磁盘上的 inode 结构 \indexcode{struct dinode} 包含一个大小和一个块号数组（见图~\ref{fig:inode}）。inode 数据位于 \lstinline{dinode} 的 \lstinline{addrs} 数组中列出的块中。前 \indexcode{NDIRECT} 个数据块列在数组的前 \lstinline{NDIRECT} 个条目中；这些块称为直接块。接下来的 \indexcode{NINDIRECT} 个数据块没有列在 inode 中，而是列在一个称为间接块的数据块中。\lstinline{addrs} 数组的最后一个条目给出了间接块的地址。因此，文件的前 12 kB（\lstinline{NDIRECT x BSIZE}）字节可以从 inode 中列出的块加载，而接下来的 256 kB（\lstinline{NINDIRECT x BSIZE}）字节只能在查阅间接块后加载。这是一个很好的磁盘表示，但对客户端来说很复杂。函数 \indexcode{bmap} 管理表示，以便更高级别的例程（例如我们稍后将看到的 \indexcode{readi} 和 \indexcode{writei}）不需要管理这种复杂性。\lstinline{bmap} 返回 inode \lstinline{ip} 的第 \lstinline{bn} 个数据块的磁盘块号。如果 \lstinline{ip} 还没有这样的块，\lstinline{bmap} 会分配一个。
 
-The function
-\indexcode{bmap}
-\lineref{kernel/fs.c:/^bmap/}
-begins by picking off the easy case: the first 
-\indexcode{NDIRECT}
-blocks are listed in the inode itself
-\linerefs{kernel/fs.c:/^..if.bn.<.NDIRECT/,/^..}/}.
-The next 
-\indexcode{NINDIRECT}
-blocks are listed in the indirect block at
-\lstinline{ip->addrs[NDIRECT]}.
-\lstinline{bmap}
-reads the indirect block
-\lineref{kernel/fs.c:/bp.=.bread.ip->dev..addr/}
-and then reads a block number from the right 
-position within the block
-\lineref{kernel/fs.c:/a.=..uint\*.bp->data/}.
-If the block number exceeds
-\lstinline{NDIRECT+NINDIRECT},
-\lstinline{bmap} 
-panics; 
-\lstinline{writei}
-contains the check that prevents this from happening
-\lineref{kernel/fs.c:/off...n...MAXFILE.BSIZE/}.
+函数 \indexcode{bmap} 首先处理简单的情况：前 \indexcode{NDIRECT} 个块列在 inode 本身中。接下来的 \indexcode{NINDIRECT} 个块列在 \lstinline{ip->addrs[NDIRECT]} 的间接块中。\lstinline{bmap} 读取间接块，然后从块内的正确位置读取块号。如果块号超过 \lstinline{NDIRECT+NINDIRECT}，\lstinline{bmap} 会 panic；\lstinline{writei} 包含检查以防止这种情况发生。
 
-\lstinline{bmap}
-allocates blocks as needed.
-An
-\lstinline{ip->addrs[]}
-or indirect
-entry of zero indicates that no block is allocated.
-As
-\lstinline{bmap}
-encounters zeros, it replaces them with the numbers of fresh blocks,
-allocated on demand
-\linerefs{kernel/fs.c:/^....if..addr.=.*==.0/,/./}
-\linerefs{kernel/fs.c:/^....if..addr.*NDIRECT.*==.0/,/./}.
+\lstinline{bmap} 根据需要分配块。\lstinline{ip->addrs[]} 或间接条目为零表示没有分配块。当 \lstinline{bmap} 遇到零时，它会用按需分配的新块号替换它们。
 
-\indexcode{itrunc}
-frees a file's blocks, resetting the inode's size to zero.
-\lstinline{itrunc}
-\lineref{kernel/fs.c:/^itrunc/}
-starts by freeing the direct blocks
-\linerefs{kernel/fs.c:/^..for.i.=.0.*NDIRECT/,/^..}/},
-then the ones listed in the indirect block
-\linerefs{kernel/fs.c:/^....for.j.=.0.*NINDIRECT/,/^....}/},
-and finally the indirect block itself
-\linerefs{kernel/fs.c:/^....bfree.*NDIRECT/,/./}.
+\indexcode{itrunc} 释放文件的块，将 inode 的大小重置为零。\lstinline{itrunc} 首先释放直接块，然后释放间接块中列出的块，最后释放间接块本身。
 
-\lstinline{bmap}
-makes it easy for
-\indexcode{readi}
-and
-\indexcode{writei} 
-to get at an inode's data.
-\lstinline{readi}
-\lineref{kernel/fs.c:/^readi/}
-starts by
-making sure that the offset and count are not 
-beyond the end of the file.
-Reads that start beyond the end of the file return an error
-\linerefs{kernel/fs.c:/^..if.off.>.ip->size/,/./}
-while reads that start at or cross the end of the file 
-return fewer bytes than requested
-\linerefs{kernel/fs.c:/^..if.off.\+.n.>.ip->size/,/./}.
-The main loop processes each block of the file,
-copying data from the buffer into 
-\lstinline{dst}
-\linerefs{kernel/fs.c:/^..for.tot=0/,/^..}/}.
-%%  NOTE: It is very hard to write line references
-%%  for writei because so many of the lines are identical
-%%  to those in readi.  Luckily, identical lines probably
-%%  don't need to be commented upon.
-\indexcode{writei}
-\lineref{kernel/fs.c:/^writei/}
-is identical to
-\indexcode{readi},
-with three exceptions:
-writes that start at or cross the end of the file
-grow the file, up to the maximum file size
-\linerefs{kernel/fs.c:/^..if.off.\+.n.>.MAXFILE/,/./};
-the loop copies data into the buffers instead of out
-\lineref{kernel/fs.c:/either.copyin.*bp->data/};
-and if the write has extended the file,
-\indexcode{writei}
-must update its size
-\linerefs{kernel/fs.c:/^..if.off.>.ip->size\)/,/./}.
+\lstinline{bmap} 使 \indexcode{readi} 和 \indexcode{writei} 能够轻松访问 inode 的数据。\lstinline{readi} 首先确保偏移量和计数不超过文件末尾。从文件末尾之后开始的读取返回错误，而在文件末尾或跨越文件末尾的读取返回的字节数少于请求的字节数。主循环处理文件的每个块，将数据从缓冲区复制到 \lstinline{dst} 中。\indexcode{writei} 与 \indexcode{readi} 相同，但有三个例外：从文件末尾或跨越文件末尾的写入会增长文件，直到最大文件大小；循环将数据复制到缓冲区中而不是复制出来；如果写入扩展了文件，\indexcode{writei} 必须更新其大小。
 
-%% Both
-%% \indexcode{readi}
-%% and
-%% \indexcode{writei}
-%% begin by checking for
-%% \lstinline{ip->type}
-%% \lstinline{==}
-%% \indexcode{T_DEV}.
-%% This case handles special devices whose data does not
-%% live in the file system; we will return to this case in the file descriptor layer.
-
-The function
-\indexcode{stati}
-\lineref{kernel/fs.c:/^stati\(/}
-copies inode metadata into the 
-\lstinline{stat}
-structure, which is exposed to user programs
-via the
-\indexcode{stat}
-system call.
+函数 \indexcode{stati} 将 inode 元数据复制到 \lstinline{stat} 结构中，该结构通过 \indexcode{stat} 系统调用暴露给用户程序。
 %% 
 %% 
 %% 
-\section{Code: directory layer}
+\section{代码：目录层}
 
-A directory is implemented internally much like a file.
-Its inode has type
-\indexcode{T_DIR}
-and its data is a sequence of directory entries.
-Each entry is a
-\indexcode{struct dirent}
-\lineref{kernel/fs.h:/^struct.dirent/},
-which contains a name and an inode number.
-The name is at most
-\indexcode{DIRSIZ}
-(14) characters;
-if shorter, it is terminated by a NULL (0) byte.
-Directory entries with inode number zero are free.
+目录在内部实现得与文件非常相似。其 inode 类型为 \indexcode{T_DIR}，其数据是一系列目录项。每个条目是一个 \indexcode{struct dirent}，包含一个名称和一个 inode 编号。名称最多为 \indexcode{DIRSIZ}（14）个字符；如果更短，则以 NULL（0）字节终止。inode 编号为零的目录项是空闲的。
 
-The function
-\indexcode{dirlookup}
-\lineref{kernel/fs.c:/^dirlookup/}
-searches a directory for an entry with the given name.
-If it finds one, it returns a pointer to the corresponding inode, unlocked,
-and sets 
-\lstinline{*poff}
-to the byte offset of the entry within the directory,
-in case the caller wishes to edit it.
-If
-\lstinline{dirlookup}
-finds an entry with the right name,
-it updates
-\lstinline{*poff}
-and returns an unlocked inode
-obtained via
-\indexcode{iget}.
-\lstinline{dirlookup}
-is the reason that 
-\lstinline{iget}
-returns unlocked inodes.
-The caller has locked
-\lstinline{dp},
-so if the lookup was for
-\indexcode{.},
-an alias for the current directory,
-attempting to lock the inode before
-returning would try to re-lock
-\lstinline{dp}
-and deadlock.
-(There are more complicated deadlock scenarios involving
-multiple processes and
-\indexcode{..},
-an alias for the parent directory;
-\lstinline{.}
-is not the only problem.)
-The caller can unlock
-\lstinline{dp}
-and then lock
-\lstinline{ip},
-ensuring that it only holds one lock at a time.
+函数 \indexcode{dirlookup} 在目录中搜索具有给定名称的条目。如果找到，它返回指向相应 inode 的指针（未锁定），并设置 \lstinline{*poff} 为目录中条目的字节偏移量，以防调用者希望编辑它。如果 \lstinline{dirlookup} 找到具有正确名称的条目，它会更新 \lstinline{*poff} 并返回通过 \indexcode{iget} 获得的未锁定 inode。\lstinline{dirlookup} 是 \lstinline{iget} 返回未锁定 inode 的原因。调用者已锁定 \lstinline{dp}，因此如果查找的是 \indexcode{.}（当前目录的别名），则在返回之前尝试锁定 inode 将尝试重新锁定 \lstinline{dp} 并导致死锁。（还有涉及多个进程和 \indexcode{..}（父目录的别名）的更复杂的死锁情况；\lstinline{.} 不是唯一的问题。）调用者可以解锁 \lstinline{dp}，然后锁定 \lstinline{ip}，确保一次只持有一个锁。
 
-The function
-\indexcode{dirlink}
-\lineref{kernel/fs.c:/^dirlink/}
-writes a new directory entry with the given name and inode number into the
-directory
-\lstinline{dp}.
-If the name already exists,
-\lstinline{dirlink}
-returns an error
-\linerefs{kernel/fs.c:/Check.that.name.is.not.present/,/^..}/}.
-The main loop reads directory entries looking for an unallocated entry.
-When it finds one, it stops the loop early
-\linerefs{kernel/fs.c:/Look for an empty dirent/,/.*break/},
-with 
-\lstinline{off}
-set to the offset of the available entry.
-Otherwise, the loop ends with
-\lstinline{off}
-set to
-\lstinline{dp->size}.
-Either way, 
-\lstinline{dirlink}
-then adds a new entry to the directory
-by writing at offset
-\lstinline{off}
-\linerefs{kernel/fs.c:/if.writei/,/return -1/}.
+函数 \indexcode{dirlink} 将具有给定名称和 inode 编号的新目录项写入目录 \lstinline{dp} 中。如果名称已存在，\lstinline{dirlink} 返回错误。主循环读取目录项寻找未分配的条目。当找到时，它提前停止循环，并将 \lstinline{off} 设置为可用条目的偏移量。否则，循环结束，\lstinline{off} 设置为 \lstinline{dp->size}。无论哪种方式，\lstinline{dirlink} 然后通过在偏移量 \lstinline{off} 处写入来向目录添加一个新条目。
 %% 
 %% 
 %% 
-\section{Code: Path names}
+\section{代码：路径名}
 
-Path name lookup involves a succession of calls to
-\indexcode{dirlookup},
-one for each path component.
-\lstinline{namei}
-\lineref{kernel/fs.c:/^namei/}
-evaluates 
-\lstinline{path}
-and returns the corresponding 
-\lstinline{inode}.
-The function
-\indexcode{nameiparent}
-is a variant: it stops before the last element, returning the 
-inode of the parent directory and copying the final element into
-\lstinline{name}.
-Both call the generalized function
-\indexcode{namex}
-to do the real work.
+路径名查找涉及一系列对 \indexcode{dirlookup} 的调用，每个路径分量一次。\lstinline{namei} 计算 \lstinline{path} 并返回相应的 \lstinline{inode}。函数 \indexcode{nameiparent} 是一个变体：它在最后一个元素之前停止，返回父目录的 inode 并将最后一个元素复制到 \lstinline{name} 中。两者都调用通用函数 \indexcode{namex} 来完成实际工作。
 
-\lstinline{namex}
-\lineref{kernel/fs.c:/^namex/}
-starts by deciding where the path evaluation begins.
-If the path begins with a slash, evaluation begins at the root;
-otherwise, the current directory
-\linerefs{kernel/fs.c:/..if.\*path.==....\)/,/idup/}.
-Then it uses
-\indexcode{skipelem}
-to consider each element of the path in turn
-\lineref{kernel/fs.c:/while.*skipelem/}.
-Each iteration of the loop must look up 
-\lstinline{name}
-in the current inode
-\lstinline{ip}.
-The iteration begins by locking
-\lstinline{ip}
-and checking that it is a directory.
-If not, the lookup fails
-\linerefs{kernel/fs.c:/^....ilock.ip/,/^....}/}.
-(Locking
-\lstinline{ip}
-is necessary not because 
-\lstinline{ip->type}
-can change underfoot—it can't—but because
-until 
-\indexcode{ilock}
-runs,
-\lstinline{ip->type}
-is not guaranteed to have been loaded from disk.)
-If the call is 
-\indexcode{nameiparent}
-and this is the last path element, the loop stops early,
-as per the definition of
-\lstinline{nameiparent};
-the final path element has already been copied
-into
-\lstinline{name},
-so
-\indexcode{namex}
-need only
-return the unlocked
-\lstinline{ip}
-\linerefs{kernel/fs.c:/^....if.nameiparent/,/^....}/}.
-Finally, the loop looks for the path element using
-\indexcode{dirlookup}
-and prepares for the next iteration by setting
-\lstinline{ip = next}
-\linerefs{kernel/fs.c:/^....if..next.*dirlookup/,/^....ip.=.next/}.
-When the loop runs out of path elements, it returns
-\lstinline{ip}.
+\lstinline{namex} 首先决定路径评估从何处开始。如果路径以斜杠开头，则从根目录开始评估；否则，从当前目录开始。然后它使用 \indexcode{skipelem} 依次考虑路径的每个元素。循环的每次迭代必须在当前 inode \lstinline{ip} 中查找 \lstinline{name}。迭代开始时锁定 \lstinline{ip} 并检查它是否是一个目录。如果不是，查找失败。（锁定 \lstinline{ip} 是必要的，不是因为它下面的 \lstinline{ip->type} 可以更改——它不能——而是因为在 \indexcode{ilock} 运行之前，不能保证 \lstinline{ip->type} 已从磁盘加载。）如果调用是 \indexcode{nameiparent} 并且这是最后一个路径元素，则根据 \lstinline{nameiparent} 的定义，循环提前停止；最后一个路径元素已被复制到 \lstinline{name} 中，因此 \indexcode{namex} 只需要返回未锁定的 \lstinline{ip}。最后，循环使用 \indexcode{dirlookup} 查找路径元素，并通过设置 \lstinline{ip = next} 为下一次迭代做准备。当循环用完路径元素时，它返回 \lstinline{ip}。
 
-The procedure
-\lstinline{namex}
-may take a long time to complete: it could involve several disk operations to
-read inodes and directory blocks for the directories traversed in the pathname
-(if they are not in the buffer cache).  Xv6 is carefully designed so that if an
-invocation of
-\lstinline{namex}
-by one kernel thread is blocked on a disk I/O, another kernel thread looking up
-a different pathname can proceed concurrently.
-\lstinline{namex}
-locks each directory in the path separately so that lookups in different
-directories can proceed in parallel.
+过程 \lstinline{namex} 可能需要很长时间才能完成：它可能涉及多个磁盘操作来读取路径名中遍历的目录的 inode 和目录块（如果它们不在缓冲区缓存中）。Xv6 被精心设计，以便如果一个内核线程对 \lstinline{namex} 的调用被磁盘 I/O 阻塞，另一个内核线程查找不同的路径名可以并发进行。\lstinline{namex} 单独锁定路径中的每个目录，以便在不同目录中的查找可以并行进行。
 
-This concurrency introduces some challenges. For example, while one kernel
-thread is looking up a pathname another kernel thread may be changing the
-directory tree by unlinking a directory.  A potential risk is that a lookup
-may be searching a directory that has been deleted by another kernel thread and
-its blocks have been re-used for another directory or file.
+这种并发性带来了一些挑战。例如，当一个内核线程正在查找一个路径名时，另一个内核线程可能正在通过取消链接一个目录来更改目录树。一个潜在的风险是，查找可能正在搜索一个已被另一个内核线程删除的目录，并且其块已被重用于另一个目录或文件。
 
-Xv6 avoids such races.  For example, when executing
-\lstinline{dirlookup}
-in
-\lstinline{namex},
-the lookup thread holds the lock on the directory and
-\lstinline{dirlookup}
-returns an inode that was obtained using
-\lstinline{iget}.
-\lstinline{iget}
-increases the reference count of the inode.  Only after receiving the
-inode from
-\lstinline{dirlookup}
-does
-\lstinline{namex}
-release the lock on the directory.  Now another thread may unlink the inode from
-the directory but xv6 will not delete the inode yet, because the reference count
-of the inode is still larger than zero.
+Xv6 避免了这种竞争。例如，当在 \lstinline{namex} 中执行 \lstinline{dirlookup} 时，查找线程持有目录的锁，并且 \lstinline{dirlookup} 返回一个使用 \lstinline{iget} 获得的 inode。\lstinline{iget} 增加 inode 的引用计数。只有在从 \lstinline{dirlookup} 接收到 inode 之后，\lstinline{namex} 才释放目录的锁。现在另一个线程可以从目录中取消链接该 inode，但 xv6 还不会删除该 inode，因为 inode 的引用计数仍然大于零。
 
-Another risk is deadlock.  For example,
-\lstinline{next}
-points to the same inode as
-\lstinline{ip}
-when looking up ".".
-Locking
-\lstinline{next}
-before releasing the lock on
-\lstinline{ip}
-would result in a deadlock.
-To avoid this deadlock,
-\lstinline{namex}
-unlocks the directory before obtaining a lock on
-\lstinline{next}.
-Here again we see why the separation between
-\lstinline{iget}
-and
-\lstinline{ilock}
-is important.
+另一个风险是死锁。例如，当查找 "." 时，\lstinline{next} 指向与 \lstinline{ip} 相同的 inode。在释放 \lstinline{ip} 上的锁之前锁定 \lstinline{next} 将导致死锁。为了避免这种死锁，\lstinline{namex} 在获取 \lstinline{next} 上的锁之前先解锁目录。这里我们再次看到将 \lstinline{iget} 和 \lstinline{ilock} 分开的重要性。
 %% 
 %% 
 %% 
-\section{File descriptor layer}
+\section{文件描述符层}
 
-A cool aspect of the Unix interface is that most resources in Unix are
-represented as files, including devices such as the console, pipes, and of
-course, real files.  The file descriptor layer is the layer that achieves this
-uniformity.
+Unix 接口的一个很酷的方面是，Unix 中的大多数资源都被表示为文件，包括控制台、管道等设备，当然还有真实的文件。文件描述符层是实现这种统一性的层。
 
-Xv6 gives each process its own table of open files, or
-file descriptors, as we saw in
-Chapter~\ref{CH:UNIX}.
-Each open file is represented by a
-\indexcode{struct file}
-\lineref{kernel/file.h:/^struct.file/},
-which is a wrapper around either an inode or a pipe,
-plus an I/O offset.
-Each call to 
-\indexcode{open}
-creates a new open file (a new
-\lstinline{struct}
-\lstinline{file}):
-if multiple processes open the same file independently,
-the different instances will have different I/O offsets.
-On the other hand, a single open file
-(the same
-\lstinline{struct}
-\lstinline{file})
-can appear
-multiple times in one process's file table
-and also in the file tables of multiple processes.
-This would happen if one process used
-\lstinline{open}
-to open the file and then created aliases using
-\indexcode{dup}
-or shared it with a child using
-\indexcode{fork}.
-A reference count tracks the number of references to
-a particular open file.
-A file can be open for reading or writing or both.
-The
-\lstinline{readable}
-and
-\lstinline{writable}
-fields track this.
+如第~\ref{CH:UNIX}~章所述，Xv6 为每个进程提供了自己的打开文件表，即文件描述符。每个打开的文件由一个 \indexcode{struct file} 表示，它包装了一个 inode 或一个管道，以及一个 I/O 偏移量。每次调用 \indexcode{open} 都会创建一个新的打开文件（一个新的 \lstinline{struct file}）：如果多个进程独立打开同一个文件，不同的实例将有不同的 I/O 偏移量。另一方面，一个单独的打开文件（相同的 \lstinline{struct file}）可以在一个进程的文件表中多次出现，也可以在多个进程的文件表中出现。如果某个进程使用 \indexcode{open} 打开文件，然后使用 \indexcode{dup} 创建别名，或者使用 \indexcode{fork} 与子进程共享它，就会发生这种情况。引用计数跟踪对特定打开文件的引用数量。一个文件可以以只读、只写或读写方式打开。\lstinline{readable} 和 \lstinline{writable} 字段跟踪这一点。
 
-All the open files in the system are kept in a global file table,
-the 
-\indexcode{ftable}.
-The file table
-has functions to allocate a file
-(\indexcode{filealloc}),
-create a duplicate reference
-(\indexcode{filedup}),
-release a reference
-(\indexcode{fileclose}),
-and read and write data
-(\indexcode{fileread}
-and 
-\indexcode{filewrite}).
+系统中所有打开的文件都保存在一个全局文件表 \indexcode{ftable} 中。文件表具有分配文件（\indexcode{filealloc}）、创建重复引用（\indexcode{filedup}）、释放引用（\indexcode{fileclose}）以及读写数据（\indexcode{fileread} 和 \indexcode{filewrite}）的函数。
 
-The first three follow the now-familiar form.
-\lstinline{filealloc}
-\lineref{kernel/file.c:/^filealloc/}
-scans the file table for an unreferenced file
-(\lstinline{f->ref}
-\lstinline{==}
-\lstinline{0})
-and returns a new reference;
-\indexcode{filedup}
-\lineref{kernel/file.c:/^filedup/}
-increments the reference count;
-and
-\indexcode{fileclose}
-\lineref{kernel/file.c:/^fileclose/}
-decrements it.
-When a file's reference count reaches zero,
-\lstinline{fileclose}
-releases the underlying pipe or inode,
-according to the type.
+前三个遵循现在熟悉的形式。\lstinline{filealloc} 扫描文件表寻找一个未被引用的文件（\lstinline{f->ref == 0}）并返回一个新引用；\indexcode{filedup} 增加引用计数；\indexcode{fileclose} 减少引用计数。当文件的引用计数达到零时，\lstinline{fileclose} 根据类型释放底层的管道或 inode。
 
-The functions
-\indexcode{filestat},
-\indexcode{fileread},
-and
-\indexcode{filewrite}
-implement the 
-\indexcode{stat},
-\indexcode{read},
-and
-\indexcode{write}
-operations on files.
-\lstinline{filestat}
-\lineref{kernel/file.c:/^filestat/}
-is only allowed on inodes and calls
-\indexcode{stati}.
-\lstinline{fileread}
-and
-\lstinline{filewrite}
-check that the operation is allowed by
-the open mode and then
-pass the call through to either
-the pipe or inode implementation.
-If the file represents an inode,
-\lstinline{fileread}
-and
-\lstinline{filewrite}
-use the I/O offset as the offset for the operation
-and then advance it
-\linerefs{kernel/file.c:/readi/,/./}
-\linerefs{kernel/file.c:/writei/,/./}.
-Pipes have no concept of offset.
-Recall that the inode functions require the caller
-to handle locking
-\linerefs{kernel/file.c:/stati/-1,/iunlock/}
-\linerefs{kernel/file.c:/readi/-1,/iunlock/}
-\linerefs{kernel/file.c:/writei\(f/-1,/iunlock/}.
-The inode locking has the convenient side effect that the
-read and write offsets are updated atomically, so that
-multiple writing to the same file simultaneously
-cannot overwrite each other's data, though their writes may end up interlaced.
+函数 \indexcode{filestat}、\indexcode{fileread} 和 \indexcode{filewrite} 实现对文件的 \indexcode{stat}、\indexcode{read} 和 \indexcode{write} 操作。\lstinline{filestat} 只允许用于 inode，并调用 \indexcode{stati}。\lstinline{fileread} 和 \lstinline{filewrite} 检查打开模式是否允许该操作，然后将调用传递给管道或 inode 的实现。如果文件代表一个 inode，\lstinline{fileread} 和 \lstinline{filewrite} 使用 I/O 偏移量作为操作的偏移量，然后前进它。管道没有偏移量的概念。回想一下，inode 函数要求调用者处理锁定。inode 锁定有一个方便的副作用，即读取和写入偏移量是原子更新的，因此同时写入同一文件的多个写入不会覆盖彼此的数据，尽管它们的写入可能会交错。
 %% 
 %% 
 %% 
-\section{Code: System calls}
+\section{代码：系统调用}
 
-With the functions that the lower layers provide, the implementation of most
-system calls is trivial
-(see
-\fileref{kernel/sysfile.c}).
-There are a few calls that
-deserve a closer look.
+有了较低层提供的函数，大多数系统调用的实现都很简单（参见 \fileref{kernel/sysfile.c}）。有几个调用值得仔细研究。
 
-The functions
-\indexcode{sys_link}
-and
-\indexcode{sys_unlink}
-edit directories, creating or removing references to inodes.
-They are another good example of the power of using 
-transactions. 
-\lstinline{sys_link}
-\lineref{kernel/sysfile.c:/^sys_link/}
-begins by fetching its arguments, two strings
-\lstinline{old}
-and
-\lstinline{new}
-\lineref{kernel/sysfile.c:/argstr.*old.*new/}.
-Assuming 
-\lstinline{old}
-exists and is not  a directory
-\linerefs{kernel/sysfile.c:/namei.old/,/^..}/},
-\lstinline{sys_link}
-increments its 
-\lstinline{ip->nlink}
-count.
-Then
-\lstinline{sys_link}
-calls
-\indexcode{nameiparent}
-to find the parent directory and final path element of
-\lstinline{new} 
-\lineref{kernel/sysfile.c:/nameiparent.new/}
-and creates a new directory entry pointing at
-\lstinline{old} 's
-inode
-\lineref{kernel/sysfile.c:/\|\| dirlink/}.
-The new parent directory must exist and
-be on the same device as the existing inode:
-inode numbers only have a unique meaning on a single disk.
-If an error like this occurs, 
-\indexcode{sys_link}
-must go back and decrement
-\lstinline{ip->nlink}.
+函数 \indexcode{sys_link} 和 \indexcode{sys_unlink} 编辑目录，创建或删除对 inode 的引用。它们很好地展示了使用事务的能力。\lstinline{sys_link} 首先获取其两个字符串参数 \lstinline{old} 和 \lstinline{new}。假设 \lstinline{old} 存在且不是一个目录，\lstinline{sys_link} 增加其 \lstinline{ip->nlink} 计数。然后 \lstinline{sys_link} 调用 \indexcode{nameiparent} 查找 \lstinline{new} 的父目录和最后一个路径元素，并创建一个指向 \lstinline{old} 的 inode 的新目录项。新的父目录必须存在，并且与现有 inode 位于同一设备上：inode 编号仅在单个磁盘上具有唯一含义。如果发生这样的错误，\indexcode{sys_link} 必须返回并减少 \lstinline{ip->nlink}。
 
-Transactions simplify the implementation because it requires updating multiple
-disk blocks, but we don't have to worry about the order in which we do
-them. They either will all succeed or none.
-For example, without transactions, updating
-\lstinline{ip->nlink}
-before creating a link, would put the file system temporarily in an unsafe
-state, and a crash in between could result in havoc.
-With transactions we don't have to worry about this.
+事务简化了实现，因为它需要更新多个磁盘块，但我们不必担心执行它们的顺序。它们要么全部成功，要么全部不成功。例如，如果没有事务，在创建链接之前更新 \lstinline{ip->nlink} 将使文件系统暂时处于不安全状态，并且在两者之间发生崩溃可能会造成严重破坏。有了事务，我们就不必担心这个问题。
 
-\lstinline{sys_link}
-creates a new name for an existing inode.
-The function
-\indexcode{create}
-\lineref{kernel/sysfile.c:/^create/}
-creates a new name for a new inode.
-It is a generalization of the three file creation
-system calls:
-\indexcode{open}
-with the
-\indexcode{O_CREATE}
-flag makes a new ordinary file,
-\indexcode{mkdir}
-makes a new directory,
-and
-\indexcode{mkdev}
-makes a new device file.
-Like
-\indexcode{sys_link},
-\indexcode{create}
-starts by calling
-\indexcode{nameiparent}
-to get the inode of the parent directory.
-It then calls
-\indexcode{dirlookup}
-to check whether the name already exists
-\lineref{kernel/sysfile.c:/dirlookup.*[^=]=.0/}.
-If the name does exist, 
-\lstinline{create}'s
-behavior depends on which system call it is being used for:
-\lstinline{open}
-has different semantics from 
-\indexcode{mkdir}
-and
-\indexcode{mkdev}.
-If
-\lstinline{create}
-is being used on behalf of
-\lstinline{open}
-(\lstinline{type}
-\lstinline{==}
-\indexcode{T_FILE})
-and the name that exists is itself
-a regular file,
-then 
-\lstinline{open}
-treats that as a success,
-so
-\lstinline{create}
-does too
-\lineref{kernel/sysfile.c:/^......return.ip/}.
-Otherwise, it is an error
-\linerefs{kernel/sysfile.c:/^......return.ip/+1,/return.0/}.
-If the name does not already exist,
-\lstinline{create}
-now allocates a new inode with
-\indexcode{ialloc}
-\lineref{kernel/sysfile.c:/ialloc/}.
-If the new inode is a directory, 
-\lstinline{create}
-initializes it with
-\indexcode{.}
-and
-\indexcode{..}
-entries.
-Finally, now that the data is initialized properly,
-\indexcode{create}
-can link it into the parent directory
-\lineref{kernel/sysfile.c:/if.dirlink/}.
-\lstinline{create},
-like
-\indexcode{sys_link},
-holds two inode locks simultaneously:
-\lstinline{ip}
-and
-\lstinline{dp}.
-There is no possibility of deadlock because
-the inode
-\lstinline{ip}
-is freshly allocated: no other process in the system
-will hold 
-\lstinline{ip} 's
-lock and then try to lock
-\lstinline{dp}.
+\lstinline{sys_link} 为现有的 inode 创建一个新名称。函数 \indexcode{create} 为一个新的 inode 创建一个新名称。它是三个文件创建系统调用的泛化：带有 \indexcode{O_CREATE} 标志的 \indexcode{open} 创建一个新的普通文件，\indexcode{mkdir} 创建一个新目录，\indexcode{mkdev} 创建一个新设备文件。与 \indexcode{sys_link} 一样，\indexcode{create} 首先调用 \indexcode{nameiparent} 获取父目录的 inode。然后它调用 \indexcode{dirlookup} 检查名称是否已经存在。如果名称存在，\lstinline{create} 的行为取决于它用于哪个系统调用：\lstinline{open} 的语义与 \indexcode{mkdir} 和 \indexcode{mkdev} 不同。如果 \lstinline{create} 代表 \lstinline{open}（\lstinline{type == T_FILE}）使用，并且存在的名称本身是一个普通文件，那么 \lstinline{open} 将其视为成功，因此 \lstinline{create} 也如此。否则，这是一个错误。如果名称不存在，\lstinline{create} 现在使用 \indexcode{ialloc} 分配一个新的 inode。如果新 inode 是一个目录，\lstinline{create} 用 \indexcode{.} 和 \indexcode{..} 条目初始化它。最后，在数据正确初始化之后，\indexcode{create} 可以将其链接到父目录中。与 \indexcode{sys_link} 一样，\lstinline{create} 同时持有两个 inode 锁：\lstinline{ip} 和 \lstinline{dp}。没有死锁的可能性，因为 inode \lstinline{ip} 是新分配的：系统中的任何其他进程都不会持有 \lstinline{ip} 的锁并尝试锁定 \lstinline{dp}。
 
-Using
-\lstinline{create},
-it is easy to implement
-\indexcode{sys_open},
-\indexcode{sys_mkdir},
-and
-\indexcode{sys_mknod}.
-\lstinline{sys_open}
-\lineref{kernel/sysfile.c:/^sys_open/}
-is the most complex, because creating a new file is only
-a small part of what it can do.
-If
-\indexcode{open}
-is passed the
-\indexcode{O_CREATE}
-flag, it calls
-\lstinline{create}
-\lineref{kernel/sysfile.c:/create.*T_FILE/}.
-Otherwise, it calls
-\indexcode{namei}
-\lineref{kernel/sysfile.c:/if..ip.=.namei.path/}.
-\lstinline{create}
-returns a locked inode, but 
-\lstinline{namei}
-does not, so
-\indexcode{sys_open}
-must lock the inode itself.
-This provides a convenient place to check that directories
-are only opened for reading, not writing.
-Assuming the inode was obtained one way or the other,
-\lstinline{sys_open}
-allocates a file and a file descriptor
-\lineref{kernel/sysfile.c:/filealloc.*fdalloc/}
-and then fills in the file
-\linerefs{kernel/sysfile.c:/type.=.FD_INODE/,/writable/}.
-Note that no other process can access the partially initialized file since it is only
-in the current process's table.
+使用 \lstinline{create}，很容易实现 \indexcode{sys_open}、\indexcode{sys_mkdir} 和 \indexcode{sys_mknod}。\lstinline{sys_open} 是最复杂的，因为创建新文件只是它所能做的一小部分。如果传递给 \indexcode{open} 的是 \indexcode{O_CREATE} 标志，它调用 \lstinline{create}。否则，它调用 \indexcode{namei}。\lstinline{create} 返回一个锁定的 inode，但 \lstinline{namei} 不会，因此 \indexcode{sys_open} 必须自己锁定 inode。这为检查目录是否仅以只读方式打开提供了一个方便的地方。假设以某种方式获得了 inode，\lstinline{sys_open} 分配一个文件和一个文件描述符，然后填充文件。请注意，没有其他进程可以访问部分初始化的文件，因为它只在当前进程的表中。
 
-Chapter~\ref{CH:SLEEP} examined the implementation of pipes
-before we even had a file system.
-The function
-\indexcode{sys_pipe}
-connects that implementation to the file system
-by providing a way to create a pipe pair.
-Its argument is a pointer to space for two integers,
-where it will record the two new file descriptors.
-Then it allocates the pipe and installs the file descriptors.
+第~\ref{CH:SLEEP}~章在我们还没有文件系统之前就检查了管道的实现。函数 \indexcode{sys_pipe} 通过提供创建管道对的方法将该实现连接到文件系统。其参数是一个指向两个整数空间的指针，它将在其中记录两个新文件描述符。然后它分配管道并安装文件描述符。
 %% 
 %%  -------------------------------------------
 %% 
-\section{Real world}
+\section{现实世界}
 
-The buffer cache in a real-world operating system is significantly
-more complex than xv6's, but it serves the same two purposes:
-caching and synchronizing access to the disk.
-Xv6's buffer cache, like V6's, uses a simple least recently used (LRU)
-eviction policy; there are many more complex
-policies that can be implemented, each good for some
-workloads and not as good for others.
-A more efficient LRU cache would eliminate the linked list,
-instead using a hash table for lookups and a heap for LRU evictions.
-Modern buffer caches are typically integrated with the
-virtual memory system to support memory-mapped files.
+现实世界操作系统中的缓冲区缓存比 xv6 的复杂得多，但它服务于相同的两个目的：缓存和同步对磁盘的访问。Xv6 的缓冲区缓存（如 V6 的）使用简单的最近最少使用（LRU）驱逐策略；可以实施许多更复杂的策略，每个策略对某些工作负载有利，而对其他工作负载不那么有利。更高效的 LRU 缓存将消除链表，而是使用哈希表进行查找，使用堆进行 LRU 驱逐。现代缓冲区缓存通常与虚拟内存系统集成以支持内存映射文件。
 
-Xv6's logging system is inefficient.
-A commit cannot occur concurrently with file-system system calls.
-The system logs entire blocks, even if
-only a few bytes in a block are changed. It performs synchronous
-log writes, a block at a time, each of which is likely to require an
-entire disk rotation time. Real logging systems address all of these
-problems.
+Xv6 的日志系统效率低下。提交不能与文件系统系统调用同时发生。系统记录整个块，即使一个块中只有几个字节被更改。它一次一个块地执行同步日志写入，每个写入可能需要整个磁盘旋转时间。真实的日志系统解决了所有这些问题。
 
-Logging is not the only way to provide crash recovery. Early file systems
-used a scavenger during reboot (for example, the UNIX
-\indexcode{fsck}
-program) to examine every file and directory and the block and inode
-free lists, looking for and resolving inconsistencies. Scavenging can take
-hours for large file systems, and there are situations where it is not
-possible to resolve inconsistencies in a way that causes the original
-system calls to be atomic. Recovery
-from a log is much faster and causes system calls to be atomic
-in the face of crashes.
+日志记录不是提供崩溃恢复的唯一方法。早期的文件系统在重启期间使用清理程序（例如 UNIX \indexcode{fsck} 程序）检查每个文件和目录以及块和 inode 空闲列表，查找并解决不一致性。对于大型文件系统，清理可能需要数小时，并且在某些情况下，无法以使得原始系统调用具有原子性的方式解决不一致性。从日志中恢复要快得多，并且在崩溃时使系统调用具有原子性。
 
-Xv6 uses the same basic on-disk layout of inodes and directories
-as early UNIX;
-this scheme has been remarkably persistent over the years.
-BSD's UFS/FFS and Linux's ext2/ext3 use essentially the same data structures.
-The most inefficient part of the file system layout is the directory,
-which requires a linear scan over all the disk blocks during each lookup.
-This is reasonable when directories are only a few disk blocks,
-but is expensive for directories holding many files.
-Microsoft Windows's NTFS, macOS's HFS, and Solaris's ZFS, just to name a few, implement
-a directory as an on-disk balanced tree of blocks.
-This is complicated but guarantees logarithmic-time directory lookups.
+Xv6 使用与早期 UNIX 相同的基本磁盘 inode 和目录布局；这种方案多年来一直非常持久。BSD 的 UFS/FFS 和 Linux 的 ext2/ext3 使用基本相同的数据结构。文件系统布局中最低效的部分是目录，它在每次查找时需要线性扫描所有磁盘块。当目录只有几个磁盘块时，这是合理的，但对于包含大量文件的目录来说，这是昂贵的。微软 Windows 的 NTFS、macOS 的 HFS 和 Solaris 的 ZFS 等，将目录实现为磁盘上的平衡树块。这很复杂，但保证了对数时间的目录查找。
 
-Xv6 is naive about disk failures: if a disk
-operation fails, xv6 panics.
-Whether this is reasonable depends on the hardware:
-if an operating systems sits atop special hardware that uses
-redundancy to mask disk failures, perhaps the operating system
-sees failures so infrequently that panicking is okay.
-On the other hand, operating systems using plain disks
-should expect failures and handle them more gracefully,
-so that the loss of a block in one file doesn't affect the
-use of the rest of the file system.
+Xv6 对磁盘故障很天真：如果磁盘操作失败，xv6 会 panic。这是否合理取决于硬件：如果操作系统位于使用冗余来掩盖磁盘故障的特殊硬件之上，也许操作系统看到故障的频率如此之低，以至于 panic 是可以的。另一方面，使用普通磁盘的操作系统应该预期故障并更优雅地处理它们，这样一个文件中一个块的丢失不会影响文件系统其余部分的使用。
 
-Xv6 requires that the file system
-fit on one disk device and not change in size.
-As large databases and multimedia files drive storage
-requirements ever higher, operating systems are developing ways
-to eliminate the ``one disk per file system'' bottleneck.
-The basic approach is to combine many disks into a single
-logical disk.  Hardware solutions such as RAID are still the 
-most popular, but the current trend is moving toward implementing
-as much of this logic in software as possible.
-These software implementations typically 
-allow rich functionality like growing or shrinking the logical
-device by adding or removing disks on the fly.
-Of course, a storage layer that can grow or shrink on the fly
-requires a file system that can do the same: the fixed-size array
-of inode blocks used by xv6 would not work well
-in such environments.
-Separating disk management from the file system may be
-the cleanest design, but the complex interface between the two
-has led some systems, like Sun's ZFS, to combine them.
+Xv6 要求文件系统适合一个磁盘设备并且大小不变。随着大型数据库和多媒体文件推动存储需求不断增长，操作系统正在开发消除“每个文件系统一个磁盘”瓶颈的方法。基本方法是将许多磁盘组合成一个逻辑磁盘。硬件解决方案如 RAID 仍然是最流行的，但当前的趋势是尽可能多地将这种逻辑在软件中实现。这些软件实现通常允许丰富的功能，例如通过动态添加或移除磁盘来增长或缩小逻辑设备。当然，一个可以动态增长或缩小的存储层需要一个可以做到这一点的文件系统：xv6 使用的固定大小的 inode 块数组在这样的环境中无法很好地工作。将磁盘管理与文件系统分开可能是最清晰的设计，但两者之间的复杂接口导致一些系统（如 Sun 的 ZFS）将它们结合起来。
 
-Xv6's file system lacks many other features of modern file systems; for example,
-it lacks support for snapshots and incremental backup.
+Xv6 的文件系统缺少现代文件系统的许多其他功能；例如，它不支持快照和增量备份。
 
-Modern Unix systems allow many kinds of resources to be
-accessed with the same system calls as on-disk storage:
-named pipes, network connections,
-remotely-accessed network file systems, and monitoring and control
-interfaces such as
-\lstinline{/proc}.
-Instead of xv6's
-\lstinline{if}
-statements in
-\indexcode{fileread}
-and
-\indexcode{filewrite},
-these systems typically give each open file a table of function pointers,
-one per operation,
-and call the function pointer to invoke that inode's
-implementation of the call.
-Network file systems and user-level file systems 
-provide functions that turn those calls into network RPCs
-and wait for the response before returning.
+现代 Unix 系统允许使用与磁盘存储相同的系统调用访问许多种类的资源：命名管道、网络连接、远程访问的网络文件系统，以及诸如 \lstinline{/proc} 之类的监视和控制接口。这些系统通常不采用 xv6 的 \indexcode{fileread} 和 \indexcode{filewrite} 中的 \lstinline{if} 语句，而是为每个打开的文件提供一个每个操作一个函数指针的表，并调用函数指针来调用该 inode 对该调用的实现。网络文件系统和用户级文件系统提供将这些调用转换为网络 RPC 并等待响应后返回的函数。
 %% 
 %%  -------------------------------------------
 %% 
-\section{Exercises}
+\section{练习}
 
 \begin{enumerate}
 
-\item Why panic in
-\lstinline{balloc} ?
-Can xv6 recover?
+\item 为什么在 \lstinline{balloc} 中 panic？ xv6 能恢复吗？
 
-\item Why panic in
-\lstinline{ialloc} ?
-Can xv6 recover?
+\item 为什么在 \lstinline{ialloc} 中 panic？ xv6 能恢复吗？
 
-\item Why doesn't
-\lstinline{filealloc}
-panic when it runs out of files?
-Why is this more common and therefore worth handling?
+\item 为什么 \lstinline{filealloc} 在文件用完时不会 panic？为什么这更常见因此值得处理？
 
-\item Suppose the file corresponding to 
-\lstinline{ip}
-gets unlinked by another process
-between 
-\lstinline{sys_link} 's
-calls to 
-\lstinline{iunlock(ip)}
-and
-\lstinline{dirlink}.
-Will the link be created correctly?
-Why or why not?
+\item 假设对应于 \lstinline{ip} 的文件在 \lstinline{sys_link} 调用 \lstinline{iunlock(ip)} 和 \lstinline{dirlink} 之间被另一个进程取消链接。链接会被正确创建吗？为什么或为什么不？
 
-\item
-\lstinline{create}
-makes four function calls (one to
-\lstinline{ialloc}
-and three to
-\lstinline{dirlink})
-that it requires to succeed.
-If any doesn't,
-\lstinline{create}
-calls
-\lstinline{panic}.
-Why is this acceptable?
-Why can't any of those four calls fail?
+\item \lstinline{create} 进行了四个函数调用（一次 \lstinline{ialloc} 和三次 \lstinline{dirlink}），它要求这些调用成功。如果有任何一个失败，\lstinline{create} 调用 \lstinline{panic}。为什么这是可以接受的？为什么这四个调用中的任何一个都不会失败？
 
-\item
-\lstinline{sys_chdir}
-calls
-\lstinline{iunlock(ip)}
-before
-\lstinline{iput(cp->cwd)},
-which might try to lock
-\lstinline{cp->cwd},
-yet postponing
-\lstinline{iunlock(ip)}
-until after the
-\lstinline{iput}
-would not cause deadlocks.
-Why not?
+\item \lstinline{sys_chdir} 在 \lstinline{iput(cp->cwd)} 之前调用 \lstinline{iunlock(ip)}，后者可能尝试锁定 \lstinline{cp->cwd}，但将 \lstinline{iunlock(ip)} 推迟到 \lstinline{iput} 之后不会导致死锁。为什么？
 
-\item Implement the
-\lstinline{lseek}
-system call.  Supporting
-\lstinline{lseek}
-will also require that you modify
-\lstinline{filewrite}
-to fill holes in the file with zero if
-\lstinline{lseek}
-sets
-\lstinline{off}
-beyond
-\lstinline{f->ip->size.}
+\item 实现 \lstinline{lseek} 系统调用。支持 \lstinline{lseek} 还需要你修改 \lstinline{filewrite}，以便如果 \lstinline{lseek} 将 \lstinline{off} 设置到 \lstinline{f->ip->size} 之后，用零填充文件中的空洞。
 
-\item Add
-\lstinline{O_TRUNC}
-and
-\lstinline{O_APPEND}
-to
-\lstinline{open},
-so that
-\lstinline{>}
-and
-\lstinline{>>}
-operators work in the shell.
+\item 向 \lstinline{open} 添加 \lstinline{O_TRUNC} 和 \lstinline{O_APPEND}，以便 shell 中的 \lstinline{>} 和 \lstinline{>>} 运算符能够工作。
 
-\item Modify the file system to support symbolic links.
+\item 修改文件系统以支持符号链接。
 
-\item Modify the file system to support named pipes.
+\item 修改文件系统以支持命名管道。
 
-\item Modify the file and VM system to support memory-mapped files.
+\item 修改文件和 VM 系统以支持内存映射文件。
 
 \end{enumerate}

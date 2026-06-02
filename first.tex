@@ -15,231 +15,165 @@
 \chapter{Operating system organization}
 \label{CH:FIRST}
 
-A key requirement for an operating system is to support several activities at once.  For
-example,
-one might use the {\tt fork} and {\tt exec} system calls from
-Chapter~\ref{CH:UNIX}
-to start both a compiler and a text editor as processes.
-The operating system must 
-\indextext{time-share} 
-resources such as CPUs and memory among these processes.
-The operating system must also arrange for
-\indextext{isolation} 
-between the processes.
-If one process has a bug and malfunctions,
-it shouldn't affect unrelated processes.
-Complete isolation, however, is too strong, since it should be possible for
-processes to intentionally interact; pipelines are an example.
-Thus
-an operating system must fulfill three requirements: multiplexing, isolation,
-and interaction.
-
-This chapter provides an overview of how operating systems are
-organized to achieve these three requirements.  It turns out there are
-many ways to do so, but this text focuses on mainstream designs
-centered around a \indextext{monolithic kernel}, which is used by many
-Unix operating systems.  This chapter also provides an overview of an
-xv6 process, the unit of isolation in xv6.
-
-Xv6 runs on a \indextext{multi-core}\footnote{
-By ``multi-core'' this text means multiple CPUs that share memory but execute
-in parallel, each with its own set of registers.
-This text sometimes uses the term
-\indextext{multiprocessor} as a synonym for multi-core,
-though multiprocessor can also refer more specifically to a computer with
-several distinct processor chips.} RISC-V microprocessor,
-and much of its low-level
-functionality (for example, its process implementation) is specific to
-RISC-V.  RISC-V is a 64-bit CPU, and xv6 is written in ``LP64'' C,
-which means long (L) and pointers (P) in the C programming language
-are 64 bits, but an {\tt int} is 32 bits.  This book assumes the reader has done
-a bit of machine-level programming on some architecture, and will
-introduce RISC-V-specific ideas as they come up.
-The user-level ISA~\cite{riscv:user} and privileged
-architecture~\cite{riscv:priv} documents are the complete
-specifications.
-You may also refer to
-``The RISC-V Reader: An Open Architecture
-Atlas''~\cite{riscv}.
-
-The CPU in a complete computer is surrounded by support hardware, much
-of it in the form of I/O interfaces. Xv6 is written for the support
-hardware simulated by qemu's ``-machine virt'' option. This includes
-RAM, a ROM containing boot code, a serial connection to the user's
-keyboard/screen, and a disk for storage.
-
+对操作系统的一个关键要求是同时支持多个活动。例如，
+人们可以使用 Chapter~\ref{CH:UNIX} 中的 {\tt fork} 和 {\tt exec} 系统调用
+来启动一个编译器和一个文本编辑器作为进程。
+操作系统必须在这些进程之间\indextext{time-share}（时分复用）
+CPU 和内存等资源。
+操作系统还必须安排这些进程之间的\indextext{isolation}（隔离）。
+如果一个进程有 bug 并发生故障，
+它不应该影响不相关的进程。
+然而，完全的隔离又过于强硬，因为进程之间应该能够
+有意地进行交互；管道就是一个例子。
+因此，
+一个操作系统必须满足三个要求：多路复用（multiplexing）、隔离（isolation）
+和交互（interaction）。
+本章概述了操作系统是如何组织
+以实现这三个要求的。
+事实证明有很多方法可以做到这一点，但本书重点关注
+以\indextext{monolithic kernel}（宏内核）为中心的网络主流设计，这种设计被许多
+Unix 操作系统所使用。
+本章还概述了 
+xv6 进程，它是 xv6 中的隔离单元。
+Xv6 运行在一个\indextext{multi-core}\footnote{
+本书所说的“多核”是指共享内存但并行执行的多个 CPU，每个 CPU 都有自己的一组寄存器。
+本书有时会使用术语\indextext{multiprocessor}（多处理器）作为多核的同义词，
+尽管多处理器也可以更具体地指具有几个不同处理器芯片的计算机。}RISC-V 微处理器上，
+并且它的许多低级功能（例如其进程实现）是特定于 
+RISC-V 的。
+RISC-V 是一个 64 位的 CPU，而 xv6 是用 “LP64” C 语言编写的，
+这意味着 C 语言中的 long (L) 和指针 (P) 
+是 64 位的，但 {\tt int} 是 32 位的。
+本书假设读者已经在某些架构上进行过
+一些机器级别的编程，并且将在出现时引入 
+RISC-V 特有的概念。
+用户级 ISA~\cite{riscv:user} 和特权
+架构~\cite{riscv:priv} 文档是完整的规范。
+你也可以参考 
+“The RISC-V Reader: An Open Architecture Atlas”~\cite{riscv}。
+完整计算机中的 CPU 被支持硬件所包围，其中大部分
+是以 I/O 接口的形式存在。
+Xv6 是为 qemu 的 “-machine virt” 选项所模拟的支持硬件而编写的。
+这包括 
+RAM、包含引导代码的 ROM、到用户键盘/屏幕的串口连接以及用于存储的磁盘。
 %% 
 \section{Abstracting physical resources}
 %% 
 
-The first question one might ask when encountering an operating system is why
-have it at all?  That is, one could implement the system calls in
-Figure~\ref{fig:api}
-as a library, with which applications link.  In this plan,
-each application could even have its own library tailored to its needs.
-Applications could directly interact with hardware resources
-and use those resources in the best way for the application (e.g., to achieve
-high or predictable performance).  Some operating systems for
-embedded devices or real-time systems are organized in this way.
-
-The downside of this library approach is that, if there is more than one
-application running, the applications must be well-behaved.
-For example, each application must periodically give up the
-CPU so that other applications can run.
-Such a 
-\textit{cooperative} 
-time-sharing scheme may be OK if all applications trust each
-other and have no bugs. It's more typical for applications
-to not trust each other, and to have bugs, so one often wants
-stronger isolation than a cooperative scheme provides.
-
-To achieve strong isolation it's helpful to forbid applications from
-directly accessing sensitive hardware resources, and instead to abstract the
-resources into services.  For example, Unix applications interact with storage
-only through the file system's
-\lstinline{open},
-\lstinline{read},
-\lstinline{write}, 
-and
-\lstinline{close}
-system calls,
-instead of reading and writing the disk directly. 
-This provides the application with the convenience of pathnames, and it allows
-the operating system (which provides the interface) to manage the disk. 
-Even if isolation is not a concern,
-programs that interact intentionally (or just wish to keep
-out of each other's way) are likely to find a file system a more convenient
-abstraction than direct use of the disk.
-
-Similarly, Unix transparently switches hardware CPUs among processes,
-saving and restoring register state as necessary,
-so that applications don't have to be
-aware of time-sharing.  This transparency allows the operating system to share
-CPUs even if some applications are in infinite loops.
-
-As another example, Unix processes use 
-\lstinline{exec}
-to build up their memory image, instead of directly interacting with physical
-memory.  This allows the operating system to decide where to place a process in
-memory; if memory is tight, the operating system might even store some of
-a process's data on disk.
-\lstinline{exec}
-also provides
-users with the convenience of a file system to store executable program images.  
-
-Many forms of interaction among Unix processes occur via file descriptors.
-Not only do file descriptors abstract away many details (e.g.,
-where data in a pipe or file is stored), they are also defined in a
-way that simplifies interaction.
-For example, if one application in a pipeline exits or fails, the kernel
-automatically generates an end-of-file signal for the next process in the pipeline.
-
-The system-call interface in
-Figure~\ref{fig:api}
-is carefully designed to provide both programmer convenience and
-the possibility of strong isolation.  The Unix interface
-is not the only way to abstract resources, but it has proved to be a good
-one.
-
+在遇到操作系统时，人们可能会问的第一个问题是为什么要
+有它？
+也就是说，人们可以将 Figure~\ref{fig:api} 中的系统调用
+实现为一个库，应用程序与其进行链接。
+在这种方案中，
+每个应用程序甚至可以拥有一个根据其需求量身定制的自己的库。
+应用程序可以直接与硬件资源交互，
+并以最适合该应用程序的方式使用这些资源（例如，以实现高效或可预测的性能）。
+一些用于嵌入式设备或实时系统的操作系统就是以这种方式组织的。
+这种库方法的不利之处在于，如果有多个应用程序正在运行，这些应用程序必须表现良好。
+例如，每个应用程序必须定期放弃 
+CPU，以便其他应用程序可以运行。
+如果所有应用程序都互相信任并且没有 bug，
+这种\textit{cooperative}（协作式）的时分复用方案可能是可以的。
+更典型的情况是应用程序之间互不信任，并且存在 bug，因此人们通常希望得到
+比协作方案提供的更强的隔离。
+为了实现强隔离，禁止应用程序
+直接访问敏感的硬件资源，而是将资源抽象为服务，这是很有帮助的。
+例如，Unix 应用程序仅通过文件系统的 
+\lstinline{open}、\lstinline{read}、\lstinline{write} 和 \lstinline{close} 
+系统调用与存储进行交互，
+而不是直接对磁盘进行读写。
+这为应用程序提供了路径名的便利，并且它允许
+提供该接口的操作系统来管理磁盘。
+即使不考虑隔离问题，
+故意进行交互（或者只是希望互不干扰）的程序
+很可能会发现文件系统是一个比直接使用磁盘更方便的抽象。
+类似地，Unix 在进程之间透明地切换硬件 CPU，
+根据需要保存和恢复寄存器状态，
+这样应用程序就不需要意识到时分复用的存在。
+这种透明性允许操作系统共享 
+CPU，即使某些应用程序处于死循环中。
+作为另一个例子，Unix 进程使用 \lstinline{exec} 
+来构建它们的内存映像，而不是直接与物理内存交互。
+这允许操作系统决定将进程放在内存中的什么位置；
+如果内存紧张，操作系统甚至可以将进程的一些
+数据存储在磁盘上。
+\lstinline{exec} 还为
+用户提供了使用文件系统来存储可执行程序映像的便利。
+Unix 进程之间的许多交互形式都是通过文件描述符进行的。
+文件描述符不仅抽象掉了许多细节（例如，
+管道或文件中的数据存储在哪里），而且它们的设计方式
+也简化了交互。
+例如，如果管道中的一个应用程序退出或失败，内核
+会自动为管道中的下一个进程生成一个文件结束（end-of-file）信号。
+Figure~\ref{fig:api} 中的系统调用接口
+经过精心设计，既提供了程序员的便利，又提供了
+强隔离的可能性。
+Unix 接口不是抽象资源的唯一方法，但它已被证明是一个好方法。
 %% 
 \section{User mode, supervisor mode, and system calls}
 %% 
 
-Strong isolation requires a hard boundary between applications and the operating
-system.
-Applications shouldn't be allowed to disturb the operation of
-the operating system or other programs, even if the application
-has a bug or is malicious.
-To achieve strong isolation, the operating system must arrange that applications cannot modify (or even
-read) the operating system's data structures and instructions and that
-applications cannot access other processes' memory.
-
-CPUs provide hardware support for strong isolation.   For
-example, RISC-V has three privilege levels which constrain
-what code can do:
-\indextext{machine mode},
-\indextext{supervisor mode}, and
-\indextext{user mode}.
-Instructions executing in machine mode have full privilege; a
-CPU starts in machine mode.  Machine mode is mostly intended for
-setting up the computer during boot.  Xv6 executes briefly in machine mode and
-then changes to supervisor mode.
-
-In supervisor mode the CPU is allowed to execute 
-\indextext{privileged instructions}:
-for example, enabling and disabling interrupts,  reading and writing
-the register that holds the address of the page table, etc.
-If an application in user mode attempts to execute
-a privileged instruction, then the CPU doesn't execute the instruction, but
-``traps''
-to special code in supervisor mode that can terminate the application.
-Figure~\ref{fig:os}
-in Chapter~\ref{CH:UNIX} illustrates this organization.  An application can
-execute only user-mode instructions (e.g., adding numbers, etc.) and is said to
-be running in 
-\indextext{user space},
-while the software in supervisor mode can also execute privileged instructions and
-is said to be running in
-\indextext{kernel space}.
-The software running in kernel space (or in supervisor mode) is called
-the
-\indextext{kernel}.
-
-Applications interact with the kernel via system calls
-calls such as {\tt read}.
-Applications are not allowed to directly call kernel functions
-or access the kernel's memory.
-RISC-V provides the \indexcode{ecall} instruction
-for system calls; it switches the CPU from user to supervisor mode
-and jumps to a kernel-specified entry point.
-Once the CPU has switched to supervisor mode,
-the kernel can then validate the arguments of the system call (e.g.,
-check if the address passed to the system call is part of the application's memory), decide whether
-the application is allowed to perform the requested operation (e.g.,
-check if the application is allowed to write the specified file), and then deny it
-or execute it.  It is important that the kernel control the entry point for
-transitions to supervisor mode; if the application could decide the kernel entry
-point, a malicious application could, for example, enter the kernel at a point where the
-validation of arguments is skipped.
-
+强隔离需要应用程序和操作系统之间有一条坚固的边界。
+不应该允许应用程序干扰操作系统或其他程序的运行，即使该应用程序
+有 bug 或是恶意的。
+为了实现强隔离，操作系统必须安排好让应用程序无法修改（甚至无法读取）操作系统的内核数据结构和指令，并且
+应用程序无法访问其他进程的内存。
+CPU 为强隔离提供硬件支持。例如，RISC-V 有三个特权级别，它们限制了
+代码可以做什么：
+\indextext{machine mode}（机器模式）、
+\indextext{supervisor mode}（主管模式）和
+\indextext{user mode}（用户模式）。
+在机器模式下执行的指令具有最高特权；
+CPU 在机器模式下启动。
+机器模式主要用于在引导期间设置计算机。
+Xv6 在机器模式下短暂执行，
+然后更改为主管模式。
+在主管模式下，CPU 被允许执行\indextext{privileged instructions}（特权指令）：
+例如，允许和禁止中断、读取和写入保存页表地址的寄存器等。
+如果用户模式下的应用程序尝试执行
+一条特权指令，那么 CPU 不会执行该指令，而是
+“trap”（陷阱）到主管模式下的特殊代码中，该代码可以终止该应用程序。
+Chapter~\ref{CH:UNIX} 中的 Figure~\ref{fig:os} 阐明了这种组织形式。一个应用程序只能
+执行用户模式指令（例如，数字相加等），并被称为运行在\indextext{user space}（用户空间）中，
+而主管模式下的软件也可以执行特权指令，并被称为运行在\indextext{kernel space}（内核空间）中。
+运行在内核空间（或主管模式下）的软件被称为
+\indextext{kernel}（内核）。
+应用程序通过系统调用（例如 {\tt read}）与内核交互。
+不允许应用程序直接调用内核函数或访问内核的内存。
+RISC-V 为系统调用提供了 \indexcode{ecall} 指令；
+它将 CPU 从用户模式切换到主管模式，
+并跳转到一个内核指定的入口点。
+一旦 CPU 切换到主管模式，
+内核就可以验证系统调用的参数（例如，
+检查传递给系统调用的地址是否是应用程序内存的一部分），决定是否
+允许该应用程序执行所请求的操作（例如，
+检查是否允许该应用程序写入指定的文件），然后拒绝它或执行它。
+内核控制切换到主管模式的入口点是至关重要的；
+如果应用程序可以决定内核入口点，恶意应用程序就可以（例如）在跳过参数验证的地方进入内核。
 %% 
 \section{Kernel organization}
 %% 
 
-A key design question is what part of the operating
-system should run in supervisor mode. 
-One possibility is that the entire operating system resides
-in the kernel, so that the implementations of all system calls
-run in supervisor mode.
-This organization is called a
-\indextext{monolithic kernel}.
+一个关键的设计问题是操作系统的哪一部分应该运行在主管模式下。
+一种可能性是整个操作系统都驻留在内核中，以便所有系统调用的实现
+都运行在主管模式下。
+这种组织形式被称为\indextext{monolithic kernel}（宏内核）。
 
-In a monolithic organization the entire operating system consists of a single
-program running in supervisor mode.
-One reason this organization is convenient is that the OS designer
-doesn't have to divide code into parts that do and do not
-require supervisor privileges.
-Furthermore, it is easy for different parts of the operating system to
-cooperate, since they are parts of a single program.
-For example, a monolithic kernel might share a disk block cache 
-with the file system and the virtual memory system. 
-
-A downside is that monolithic kernels tend to grow large
-and complex, so that no one developer understands all of 
-the interactions between different parts of the code;
-this is a recipe for bugs. A bug in the kernel is particularly
-troublesome because it may cause the entire computer to crash,
-or cause many applications to malfunction,
-or make the entire computer vulnerable to security attacks.
-
-A \indextext{microkernel} aims to reduce the incidence of bugs in the
-kernel. The idea is to put an absolute minimum of functionality in the
-kernel itself, so that little code executes in supervisor mode, and so
-that the kernel is easy to understand and analyze for correctness. The
-bulk of the operating system runs as user-level server processes. For
-example, the file system code would execute as a server process, in
-user mode rather than supervisor mode.
-
+在宏内核组织中，整个操作系统由一个在主管模式下运行的单一程序组成。
+这种组织形式很方便的一个原因是操作系统设计者
+不需要将代码划分为需要和不需要主管特权的部分。
+此外，操作系统的不同部分很容易进行合作，因为它们是一个单一程序的组成部分。
+例如，宏内核可能会与文件系统和虚拟内存系统共享一个磁盘块缓存。
+缺点是宏内核往往会变得庞大而复杂，以至于没有哪一个开发人员能够理解
+代码不同部分之间的所有交互；
+这是产生 bug 的温床。内核中的 bug 特别麻烦，因为它可能会导致整个计算机崩溃，
+或者导致许多应用程序发生故障，
+或者使整个计算机容易受到安全攻击。
+\indextext{microkernel}（微内核）旨在减少内核中 bug 的发生率。
+其思想是将绝对最少的功能放在内核本身中，以便在主管模式下执行的代码很少，并且
+使内核易于理解和进行正确性分析。
+操作系统的大部分作为用户级服务器进程运行。
+例如，文件系统代码将作为一个服务器进程执行，运行在用户模式而不是主管模式下。
 \begin{figure}[t]
 \center
 \includegraphics[scale=0.5]{fig/mkernel.pdf}
@@ -247,63 +181,36 @@ user mode rather than supervisor mode.
 \label{fig:mkernel}
 \end{figure}
 
-Figure~\ref{fig:mkernel}
-illustrates this microkernel design.  In the figure, the file system runs as a
-user-level server process.
-To allow applications to interact with the
-file server, the kernel provides an inter-process communication
-mechanism to send messages from one
-user-mode process to another.  For example, if an application like the shell
-wants to read or write a file, it sends a message to the file server and waits
-for a response. 
+Figure~\ref{fig:mkernel} 阐明了这种微内核设计。在图中，文件系统作为一个
+用户级服务器进程运行。
+为了允许应用程序与文件服务器交互，内核提供了一种进程间通信机制，用于将消息从一个
+用户模式进程发送到另一个进程。
+例如，如果像 shell 这样的应用程序想要读取或写入文件，它会向文件服务器发送一条消息并等待
+响应。
+在微内核中，内核接口由少数几个低级函数组成，用于启动应用程序、发送消息、
+访问设备硬件等。这种组织形式允许内核
+相对简单，因为大部分操作系统都驻留在用户级服务器中。
+在现实世界中，宏内核和微内核都很受欢迎。许多
+Unix 内核是宏内核。
+例如，Linux 拥有一个宏内核，
+尽管一些操作系统功能作为用户级服务器运行（例如窗口系统）。
+Linux 为操作系统密集型应用程序提供高性能，部分原因在于内核的子系统可以紧密集成。
+像 Minix、L4 和 QNX 这样的操作系统被组织为带有服务器的微内核，并在嵌入式环境中得到了广泛部署。
+L4 的一个变体 seL4 非常小，以至于它已经被验证了内存安全性和其他安全属性~\cite{sel4}。
+在操作系统的开发人员中，关于哪种组织形式更好存在很多争论，但还没有得出哪一种更好的确凿证据。
+此外，这在很大程度上取决于“更好”意味着什么：
+更快的性能、更小的代码尺寸、内核的可靠性、
+整个操作系统的可靠性（包括用户级服务）等。
 
-In a microkernel, the kernel interface consists of a few low-level
-functions for starting applications, sending messages,
-accessing device hardware, etc.  This organization allows the kernel to be 
-relatively simple, as most of the operating system
-resides in user-level servers.
-
-In the real world, both monolithic kernels and microkernels are
-popular. Many
-Unix kernels are monolithic. For example, Linux has a monolithic kernel,
-although some OS functions run as user-level servers (e.g., the window
-system).  Linux delivers high performance to OS-intensive applications, partially
-because the subsystems of the kernel can be tightly integrated.
-
-Operating systems such as Minix, L4, and QNX are organized as a microkernel with
-servers, and have seen wide deployment in embedded settings.  A
-variant of L4, seL4, is small enough that it has been verified for
-memory safety and other security properties~\cite{sel4}.
-
-There is much debate among developers of operating systems about which
-organization is better, but there is no conclusive evidence one way or
-the other.  Furthermore, it depends much on what ``better'' means:
-faster performance, smaller code size, reliability of the kernel,
-reliability of the complete operating system (including user-level
-services), etc.
-
-There are also practical considerations that may be more important
-than the question of which organization.  Some operating systems
-have a microkernel but run some of the user-level services in kernel
-space for performance reasons.  Some operating systems have monolithic
-kernels because that is how they started and there is little incentive
-to move to a pure microkernel organization, because new features may
-be more important than rewriting the existing operating system to fit a microkernel
-design.
-
-From this book's perspective, microkernel and monolithic operating
-systems share many key ideas.  They implement system calls, they use
-page tables, they handle interrupts, they support processes, they use
-locks for concurrency control, they implement a file system,
-etc. This book focuses on these core ideas.
-
-Xv6 is
-implemented as a monolithic kernel, like most Unix operating systems.
-Thus, the xv6 kernel interface corresponds to the operating system
-interface, and the kernel implements the complete operating system.  Since 
-xv6 doesn't provide many services, its kernel is smaller than some
-microkernels, but conceptually xv6 is monolithic.  
-
+还有一些实际的考虑可能比采用哪种组织形式的问题更重要。
+一些操作系统具有微内核，但出于性能原因在内核空间运行某些用户级服务。
+一些操作系统具有宏内核，因为它们最初就是这样开始的，并且几乎没有动力去转向纯微内核组织，因为新特性可能比重写现有的操作系统以适应微内核设计更重要。
+从本书的角度来看，微内核和宏内核操作系统共享许多关键思想。
+它们实现系统调用，它们使用页表，它们处理中断，它们支持进程，它们使用锁进行并发控制，它们实现文件系统
+等。本书重点关注这些核心思想。
+Xv6 是作为一个宏内核实现的，就像大多数 Unix 操作系统一样。
+因此，xv6 内核接口对应于操作系统接口，并且内核实现了整个操作系统。
+由于 xv6 并没有提供很多服务，其内核比一些微内核还要小，但从概念上讲 xv6 是宏内核。
 \section{Code: xv6 organization}
 
 \begin{figure}[t]
@@ -311,79 +218,66 @@ microkernels, but conceptually xv6 is monolithic.
 \begin{tabular}{l|l|l}
 & {\bf File} & {\bf Description} \\
 \midrule
-Boot & entry.S & Very first boot instructions. \\
+Boot & entry.S & Very first boot instructions.
+ \\
  & main.c & Control initialization of other modules. \\
- & start.c & Early machine-mode boot code. \\
+ & start.c & Early machine-mode boot code.
+ \\
 Processes & exec.c & exec() system call. \\
  & proc.c & Processes and scheduling. \\
- & swtch.S & Thread switching. \\
+ & swtch.S & Thread switching.
+ \\
  & sysproc.c & Process-related system calls. \\
-Traps & kernelvec.S & Handle traps from kernel code. \\
+Traps & kernelvec.S & Handle traps from kernel code.
+ \\
  & trampoline.S & Handle traps from user code. \\
- & trap.c & C code to handle and return from traps and interrupts. \\
+ & trap.c & C code to handle and return from traps and interrupts.
+ \\
  & syscall.c & Dispatch system calls to handling function. \\
-Memory & vm.c & Manage page tables and address spaces. \\
+Memory & vm.c & Manage page tables and address spaces.
+ \\
  & kalloc.c & Physical page allocator. \\
-Devices & console.c & Connect to the user keyboard and screen. \\
+Devices & console.c & Connect to the user keyboard and screen.
+ \\
  & plic.c & RISC-V interrupt controller. \\
- & printf.c & Formatted output to the console. \\
+ & printf.c & Formatted output to the console.
+ \\
  & uart.c & Serial-port console device driver. \\
- & virtio\_disk.c & Disk device driver. \\
+ & virtio\_disk.c & Disk device driver.
+ \\
 FS & bio.c & Disk block cache for the file system. \\
- & file.c & File descriptor support. \\
+ & file.c & File descriptor support.
+ \\
  & fs.c & File system. \\
- & log.c & File system logging and crash recovery. \\
+ & log.c & File system logging and crash recovery.
+ \\
  & sysfile.c & File-related system calls. \\
- & pipe.c & Pipes. \\
+ & pipe.c & Pipes.
+ \\
 Misc & sleeplock.c & Locks that yield the CPU. \\
- & spinlock.c & Locks that don't yield the CPU. \\
+ & spinlock.c & Locks that don't yield the CPU.
+ \\
  & string.c & C string and byte-array library. \\
 \end{tabular}
 \caption{Xv6 kernel source files.}
 \label{fig:source}
 \end{figure}
 
-The xv6 kernel source is in the {\tt kernel/} sub-directory.
-Figure~\ref{fig:source} lists the files, divided into the
-major areas of kernel responsibility: starting the
-system (booting), creating
-and controlling processes, handling traps (interrupts
-and system calls), allocating memory and configuring
-virtual addresses, controlling devices, and managing the
-file-system.
-
+Xv6 内核源代码在 {\tt kernel/} 子目录下。
+Figure~\ref{fig:source} 列出了这些文件，分为内核职责的主要领域：启动系统（引导）、创建和控制进程、处理陷阱（中断和系统调用）、分配内存和配置虚拟地址、控制设备以及管理文件系统。
 %% 
 \section{Process overview}
 %% 
 
-The unit of isolation in xv6 (as in other Unix operating systems) is a 
-\indextext{process}.
-The process abstraction prevents one process from wrecking or spying on
-another process's memory, CPU, file descriptors, etc.  It also prevents a process
-from wrecking the kernel itself, so that a process can't subvert the kernel's
-isolation mechanisms.
-The kernel must implement the process abstraction with care because
-a buggy or malicious application may trick the kernel or hardware into doing
-something bad (e.g., circumventing isolation).  The mechanisms used by
-the kernel to implement processes include the user/supervisor mode flag, address spaces,
-and time-slicing of threads.
-
-To help enforce isolation, the process abstraction provides the
-illusion to a program that it has its own private machine.  A process provides
-a program with what appears to be a private memory system, or
-\indextext{address space}, 
-which other processes cannot read or write.
-A process also provides the program with what appears to be its own
-CPU to execute the program's instructions.
-
-Xv6 uses page tables (which are implemented by hardware) to give each process
-its own address space. The RISC-V page table
-translates (or ``maps'') a
-\indextext{virtual address}
-(the address that an RISC-V instruction manipulates) to a
-\indextext{physical address}
-(an address that the CPU sends to main memory).
-
+在 xv6 中（与其他 Unix 操作系统一样），隔离的单位是一个\indextext{process}（进程）。
+进程抽象可以防止一个进程破坏或监视另一个进程的内存、CPU、文件描述符等。它还可以防止进程破坏内核本身，从而使进程无法颠覆内核的隔离机制。
+内核必须小心地实现进程抽象，因为一个有 bug 或恶意的应用程序可能会欺骗内核或硬件做出坏事（例如，绕过隔离）。
+内核用于实现进程的机制包括用户/主管模式标志、地址空间以及线程的时间片分割。
+为了帮助加强隔离，进程抽象为程序提供了一种拥有自己私有机器的幻觉。
+进程为程序提供了一个看似私有的内存系统，或\indextext{address space}（地址空间），其他进程无法对其进行读写。
+进程还为程序提供了看似属于其自己的 CPU 来执行程序的指令。
+Xv6 使用页表（由硬件实现）为每个进程提供其自己的地址空间。
+RISC-V 页表将\indextext{virtual address}（虚拟地址，即 RISC-V 指令操作的地址）翻译（或“映射”）为\indextext{physical address}（物理地址，即 CPU 发送到主内存的地址）。
 \begin{figure}[t]
 \centering
 \includegraphics[scale=0.5]{fig/as.pdf}
@@ -391,296 +285,110 @@ translates (or ``maps'') a
 \label{fig:as}
 \end{figure}
 
-Xv6 maintains a separate page table for each process that defines that process's
-address space. As illustrated in 
-Figure~\ref{fig:as},
-an address space includes the process's
-\indextext{user memory}
-starting at virtual address zero. Instructions come first,
-followed by global variables, then the stack,
-and finally a ``heap'' area (for malloc)
-that the process can expand as needed.
-There are a number of factors that limit the
-maximum size of a process's address space:
-pointers on the RISC-V are 64 bits wide;
-the hardware uses only the low 39 bits when
-looking up virtual addresses in page tables;
-and xv6 uses only 38 of those 39 bits.
-Thus, the maximum address is $2^{38}-1$ =
-0x3fffffffff, which is \lstinline{MAXVA}~\lineref{kernel/riscv.h:/define.MAXVA/}.
-At the top of the address space xv6 places
-a \indextext{trampoline} page (4096 bytes)
-and a \indextext{trapframe} page.  Xv6 uses these two pages
-to transition into the kernel and back;
-the trampoline page contains the code to transition in and out
-of the kernel, and the trapframe is where the kernel saves
-the process's user registers,
-as Chapter~\ref{CH:TRAP} explains.
+Xv6 为每个进程维护一个单独的页表，用以定义该进程的地址空间。
+如 Figure~\ref{fig:as} 所示，
+一个地址空间包括从虚拟地址零开始的进程的\indextext{user memory}（用户内存）。
+指令首先排在最前面，
+接着是全局变量，然后是栈，
+最后是一个进程可以根据需要扩展的“堆（heap）”区（用于 malloc）。
+有许多因素限制了
+进程地址空间的最大规模：
+RISC-V 上的指针是 64 位宽的；
+硬件在页表中查找虚拟地址时仅使用低 39 位；
+而 xv6 仅使用这 39 位中的 38 位。
+因此，最大地址是 $2^{38}-1$ = 0x3fffffffff，即 \lstinline{MAXVA}~\lineref{kernel/riscv.h:/define.MAXVA/}。
+在地址空间的顶部，xv6 放置了一个 \indextext{trampoline}（蹦床）页（4096 字节）和一个 \indextext{trapframe}（陷阱帧）页。
+Xv6 使用这两个页来转换进入内核以及返回；
+蹦床页包含进入和退出内核的代码，而陷阱帧是内核保存进程的用户寄存器的地方，正如 Chapter~\ref{CH:TRAP} 所解释的那样。
+Xv6 内核为每个进程维护许多状态片段，并将它们收集到 \indexcode{struct proc} \lineref{kernel/proc.h:/^struct.proc/} 中。
+一个进程最重要的内核状态片段是它的页表、它的内核栈以及它的运行状态。
+我们将使用表示法 \indexcode{p->xxx} 来引用 \lstinline{proc} 结构的元素；例如，\indexcode{p->pagetable} 是一个指向进程页表的指针。
+此时，请阅读定义了 {\tt struct proc} 的 {\tt kernel/proc.h}。
+理解 xv6 的代码对你来说比这本书更重要；
+你应该优先考虑代码，并在需要时参考本书以澄清代码。
+某些代码的目的起初可能并不明显，但进一步阅读和搜索代码将会有所帮助。
+欢迎随意探索和修改代码。
 
-The xv6 kernel maintains many pieces of state for each process,
-which it gathers into a
-\indexcode{struct proc}
-\lineref{kernel/proc.h:/^struct.proc/}.
-A process's most important pieces of kernel state are its 
-page table, its kernel stack, and its run state.
-We'll use the notation
-\indexcode{p->xxx}
-to refer to elements of the
-\lstinline{proc}
-structure; for example,
-\indexcode{p->pagetable} is a pointer to the process's page table.
-
-At this point, please read {\tt kernel/proc.h}, which defines {\tt
-  struct proc}. The xv6 code is more important for you to understand
-than this book; you should prioritize the code, and consult this book
-as needed to clarify the code. The purpose of some of the code may not
-be apparent at first, but further reading and searching the code will
-help. Feel free to explore and modify the code.
-
-Each process has a thread of control (or 
-\indextext{thread}
-for short) that holds the state needed to execute the process.
-At any given time, a thread might be executing on a CPU,
-or suspended (not executing, but capable of resuming executing
-in the future).
-To switch a CPU between processes,
-the kernel suspends the thread currently running on that CPU
-and saves its state,
-and restores the state of another process's previously-suspended
-thread.  Much of the state of a thread (local variables, function call return
-addresses) is stored on the thread's stacks.
-Each process has two stacks: a user stack and a kernel stack
-(\indexcode{p->kstack}).
-When the process is executing user instructions, only its user stack
-is in use, and its kernel stack is empty.
-When the process enters the kernel (for a system call or interrupt),
-the kernel code executes on the process's kernel stack; while
-a process is in the kernel, its user stack still contains saved
-data, but isn't actively used.
-A process's thread alternates between actively using its user stack
-and its kernel stack. The kernel stack is separate (and protected from
-user code) so that the kernel
-can execute even if a process has wrecked its user stack.
-
-A process's user code
-can make a system call by executing the RISC-V \indexcode{ecall}
-instruction. This instruction switches to supervisor mode and
-changes the program counter to a kernel-defined entry point.  The code
-at the entry point switches to the process's kernel stack and executes the kernel
-instructions that implement the system call.  When the system call
-completes, the kernel returns to
-user space by executin the \indexcode{sret} instruction, which switches
-to user mode and resumes executing user instructions
-just after the system call instruction.  A process's thread can
-``block'' in the kernel to wait for I/O, and resume where it left off
-when the I/O has finished.
-
-\indexcode{p->state} 
-indicates whether the process is allocated, ready
-to run, currently running on a CPU, waiting for I/O, or exiting.
-
-\indexcode{p->pagetable}
-holds the process's page table, in the format
-that the RISC-V hardware expects.
-Xv6 causes the paging hardware to use a process's
-\lstinline{p->pagetable}
-when executing that process in user space.
-A process's page table also serves as the record of the
-addresses of the physical pages allocated to store the process's
-memory.
-
-In summary, a process bundles two design ideas: an address space to
-give a process the illusion of its own memory, and a thread to give
-the process the illusion of its own CPU.  In xv6, a process consists
-of one address space and one thread.  In real operating systems a
-process may have more than one thread to take advantage of multiple CPUs.
-
+每个进程都有一个控制线程（或者简称为\indextext{thread}（线程）），它保存了执行该进程所需的状态。
+在任何给定的时间，一个线程可能正在 CPU 上执行，或者处于挂起状态（没有执行，但能够在未来恢复执行）。
+为了在进程之间切换 CPU，内核会挂起当前在该 CPU 上运行的线程并保存其状态，然后恢复另一个进程先前挂起的线程的状态。
+线程的大部分状态（局部变量、函数调用返回地址）都存储在线程的栈中。
+每个进程都有两个栈：一个用户栈和一个内核栈（\indexcode{p->kstack}）。
+当进程正在执行用户指令时，只有它的用户栈在使用中，而它的内核栈是空的。
+当进程进入内核时（由于系统调用或中断），内核代码在进程的内核栈上执行；
+当一个进程在内核中时，它的用户栈仍然包含保存的数据，但并没有被活跃地使用。
+进程的线程在交替地活跃使用它的用户栈和它的内核栈。
+内核栈是独立的（并且受到保护而不受用户代码影响），这样即使进程破坏了其用户栈，内核也可以执行。
+进程的用户代码可以通过执行 RISC-V \indexcode{ecall} 指令来发起系统调用。
+该指令切换到主管模式并改变程序计数器到一个内核定义的入口点。
+入口点处的代码切换到进程的内核栈，并执行实现系统调用的内核指令。
+当系统调用完成时，内核通过执行 \indexcode{sret} 指令返回到用户空间，该指令会切换到用户模式并紧随系统调用指令之后恢复执行用户指令。
+进程的线程可以在内核中“阻塞（block）”以等待 I/O，并在 I/O 完成时从上次中断的地方恢复。
+\indexcode{p->state} 指示进程是被分配、准备运行、当前在 CPU 上运行、等待 I/O 还是正在退出。
+\indexcode{p->pagetable} 保存进程的页表，格式符合 RISC-V 硬件的预期。
+Xv6 在用户空间执行该进程时，会导致分页硬件使用进程的 \lstinline{p->pagetable}。
+进程的页表还用作记录分配用于存储进程内存的物理页地址的记录。
+总之，一个进程捆绑了两个设计思想：一个给进程带来其自身内存幻觉的地址空间，以及一个给进程带来其自身 CPU 幻觉的线程。
+在 xv6 中，一个进程由一个地址空间和一个线程组成。
+在真实的操作系统中，一个进程可能拥有多个线程以利用多个 CPU 的优势。
 %% 
 \section{Code: starting xv6, the first process and system call}
 %% 
-To make xv6 more concrete, we'll outline how the kernel starts and
-runs the first process. The subsequent chapters will describe the
-mechanisms that show up in this overview in more detail.
-Please read {\tt kernel/entry.S}, {\tt kernel/start.c},
-{\tt kernel/main.c}, and {\tt user/init.c}.
-
-When the RISC-V computer powers on, it initializes
-itself and runs a boot loader which is stored in read-only
-memory.  The boot loader copies the xv6 kernel into memory
-at physical address
-\texttt{0x80000000}.
-The reason it places the kernel at
-\texttt{0x80000000}
-rather than
-\texttt{0x0}
-is because the address range
-\texttt{0x0:0x80000000}
-contains I/O devices.
-
-Then the boot loader jumps to xv6 starting at
-\indexcode{_entry}
-\lineref{kernel/entry.S:/^.entry:/}.
-The RISC-V starts with paging hardware disabled:
-virtual addresses map directly to physical addresses.
-The instructions at
-\lstinline{_entry}
-set up a stack so that xv6 can run C code.
-Xv6 declares space for this stack,
-\lstinline{stack0},
-in the file
-\lstinline{start.c}
-\lineref{kernel/start.c:/stack0/}.
-The code at
-\lstinline{_entry}
-loads the stack pointer register
-\texttt{sp}
-with the address
-\lstinline{stack0+4096},
-the top of the stack, because the stack
-on RISC-V grows down.
-Now that the kernel has a stack,
-\lstinline{_entry}
-calls into C code at
-\lstinline{start}
-\lineref{kernel/start.c:/^start/}.
-
-The function
-\lstinline{start}
-performs some setup that the CPU only allows in machine mode,
-most crucially programming the clock chip to generate
-timer interrupts.
-Then {\tt start} uses the RISC-V {\tt mret}
-instruction to switch to supervisor mode and
-jump to 
-\lstinline{main}
-\lineref{kernel/main.c:/^main/}.
-{\tt mret} requires
-a bit of setup:
-{\tt start} sets the previous privilege mode to
-supervisor in the register
-\lstinline{mstatus},
-sets the destination address to
-\lstinline{main}
-by writing
-\lstinline{main}'s
-address into
-the register
-\lstinline{mepc},
-disables virtual address translation in supervisor mode
-by writing
-\lstinline{0}
-into the page-table register
-\lstinline{satp},
-and delegates all interrupts and exceptions
-to supervisor mode.
-
-After
-\lstinline{main}
-\lineref{kernel/main.c:/^main/}  
-initializes several devices and subsystems, 
-it creates the first process by calling 
-\lstinline{userinit}
-\lineref{kernel/proc.c:/^userinit/}.
-All newly created processes start executing in the kernel in
-\lstinline{forkret}
-\lineref{kernel/proc.c:/^forkret/}.
-As a special case for the first process, {\tt forkret}
-calls {\tt kexec} to load the user program {\tt /init}.
-
-After calling
-\lstinline{kexec},
-{\tt forkret} returns to user space in
-the \lstinline{/init} process.
-\lstinline{init}
-\lineref{user/init.c:/^main/}
-creates a new console device file
-if needed
-and then opens it as file descriptors 0, 1, and 2.
-Then it starts a shell on the console.
-The system is up.
+为了使 xv6 更加具体，我们将概述内核如何启动和运行第一个进程。
+后续章节将更详细地描述在此概述中出现的机制。
+请阅读 {\tt kernel/entry.S}、{\tt kernel/start.c}、{\tt kernel/main.c} 和 {\tt user/init.c}。
+当 RISC-V 计算机上电时，它会初始化自身并运行一个存储在只读内存中的引导加载程序（boot loader）。
+引导加载程序将 xv6 内核复制到物理地址 \texttt{0x80000000} 处的内存中。
+它将内核放置在 \texttt{0x80000000} 而不是 \texttt{0x0} 的原因是因为地址范围 \texttt{0x0:0x80000000} 包含 I/O 设备。
+然后引导加载程序跳转到从 \indexcode{_entry} \lineref{kernel/entry.S:/^.entry:/} 开始的 xv6。
+RISC-V 在启动时禁用分页硬件：虚拟地址直接映射到物理地址。
+\lstinline{_entry} 处的指令设置了一个栈，以便 xv6 可以运行 C 代码。
+Xv6 在文件 \lstinline{start.c} \lineref{kernel/start.c:/stack0/} 中为这个栈 \lstinline{stack0} 声明了空间。
+\lstinline{_entry} 处的代码将地址 \lstinline{stack0+4096}（栈的顶部）加载到栈指针寄存器 \texttt{sp} 中，因为 RISC-V 上的栈是向下增长的。
+现在内核有了一个栈，\lstinline{_entry} 调用 \lstinline{start} \lineref{kernel/start.c:/^start/} 处的 C 代码。
+函数 \lstinline{start} 执行一些 CPU 仅在机器模式下允许的设置，最关键的是对时钟芯片进行编程以产生定时器中断。
+然后 {\tt start} 使用 RISC-V 的 {\tt mret} 指令切换到主管模式并跳转到 \lstinline{main} \lineref{kernel/main.c:/^main/}。
+{\tt mret} 需要进行一点设置：
+{\tt start} 将寄存器 \lstinline{mstatus} 中的前一个特权模式设置为核心态（supervisor），通过将 \lstinline{main} 的地址写入寄存器 \lstinline{mepc} 来将目标地址设置为 \lstinline{main}，通过将 \lstinline{0} 写入页表寄存器 \lstinline{satp} 来在主管模式下禁用虚拟地址转换，并将所有中断和异常委托给主管模式。
+在 \lstinline{main} \lineref{kernel/main.c:/^main/} 初始化了几个设备和子系统之后，它通过调用 \lstinline{userinit} \lineref{kernel/proc.c:/^userinit/} 创建了第一个进程。
+所有新创建的进程都在内核中的 \lstinline{forkret} \lineref{kernel/proc.c:/^forkret/} 开始执行。
+作为第一个进程的特殊情况，{\tt forkret} 调用 {\tt kexec} 来加载用户程序 {\tt /init}。
+在调用 \lstinline{kexec} 之后，{\tt forkret} 返回到 {\tt /init} 进程中的用户空间。
+\lstinline{init} \lineref{user/init.c:/^main/} 在需要时创建一个新的控制台设备文件，然后将其打开为文件描述符 0、1 和 2。然后它在控制台上启动一个 shell。
+系统已经启动。
 
 \section{Security Model}
 
-You may wonder how the operating system deals with buggy or malicious
-code. Because coping with malice is strictly harder than dealing with
-accidental bugs, it's reasonable to 
-focus mostly on providing security against malice.
-Here's a high-level view of typical security assumptions and
-goals in operating system design.
-
-The operating system must assume that a process's user-level code will
-do its best to wreck the kernel or other processes. User code may try
-to dereference pointers outside its allowed address space; it may
-attempt to execute instructions not intended
-for user code; it may try to read and write RISC-V control
-registers; it may try to access device hardware;
-and it may pass clever values to system calls in an attempt
-to trick the kernel into crashing or doing something stupid.
-
-The
-kernel's goal is to restrict each user process so that it can only
-access its own user memory, use the 32 general-purpose
-RISC-V registers, and affect the kernel and other processes in the
-ways that system calls are intended to allow. The kernel must prevent
-any other actions. These are typically absolute requirements in kernel
-design.
-
-Expectations for the kernel's own code are different. Kernel
-code is assumed to be written by well-meaning and careful programmers,
-to be bug-free, and to contain
-nothing malicious. This assumption affects how we analyze kernel code.
-For example, there are many internal kernel functions (e.g., the spin
-locks) that would cause serious problems if kernel code used them
-incorrectly. We assume,
-however, that the kernel uses its own functions correctly.
-At the hardware level, the RISC-V CPU, RAM, disk, etc. are
-assumed to operate as advertised in the documentation, with no
-hardware bugs.
-
-Real life is not so straightforward. It's
-difficult to prevent abusive user programs from 
-calling system calls in a way that makes the system unusable
-by consuming kernel-protected resources:
-disk space, CPU time, process table slots, etc. It's usually
-impossible to write 100\% bug-free kernel code or design bug-free hardware; if the
-writers of malicious user code are aware of kernel or hardware bugs,
-they will exploit them. Even in mature, widely-used kernels, such as
-Linux, people often discover previously-unknown
-vulnerabilities~\cite{mitre:cves}.
-Finally, the distinction between
-user and kernel code is sometimes blurred: some privileged user-level
-processes may provide essential services and effectively be part of
-the operating system, and in some operating systems privileged user
-code can insert new code into the kernel (as with Linux's loadable
-kernel modules and eBPF).
-
-As a partial defense against kernel bugs, xv6 code includes checks for
-inconsistencies and unrecoverable errors, and will ``panic'' in
-response, by calling {\tt panic()}. This function prints an error
-message and halts the system. Panicking is not desirable, but is
-preferable to continuing execution. Typically a panic results from a
-kernel bug that causes kernel data to be incorrect or causes the
-kernel to perform an illegal action such as referencing non-existent
-memory; in such a situation it is safer to halt execution with {\tt
-  panic()} than to try to continue in an inconsistent state. A kernel
-developer would react to a panic by working to identify and fix the
-underlying code bug.
-
+你可能会想操作系统是如何处理有 bug 的或恶意的代码的。
+因为应对恶意严格来说比处理意外的 bug 更困难，所以将主要精力集中在提供防御恶意的安全性上是合理的。
+这是操作系统设计中典型安全假设和目标的高级视图。
+操作系统必须假设进程的用户级代码将尽其最大努力去破坏内核或其他进程。
+用户代码可能会尝试解引用其允许的地址空间之外的指针；它可能会尝试执行不适用于用户代码的指令；
+它可能会尝试读取和写入 RISC-V 控制寄存器；它可能会尝试访问设备硬件；
+并且它可能会向系统调用传递精明的值，试图诱骗内核崩溃或做出愚蠢的事情。
+内核的目标是限制每个用户进程，使其只能访问自己的用户内存，使用 32 个通用 RISC-V 寄存器，并以系统调用预期允许的方式影响内核和其他进程。
+内核必须阻止任何其他行为。这些通常是内核设计中的绝对要求。
+对内核自身代码的期望是不同的。内核代码被假定是由用意良好且细心的程序员编写的、是没有 bug 的，并且不包含任何恶意内容。
+这一假设影响了我们如何分析内核代码。例如，有许多内部内核函数（例如自旋锁），如果内核代码不正确地使用它们，将会导致严重的问题。
+然而，我们假设内核正确地使用了它自己的函数。
+在硬件层面上，RISC-V CPU、RAM、磁盘等被假定按照文档中的广告进行操作，没有硬件 bug。
+现实生活并非如此简单。很难防止滥用的用户程序通过消耗内核保护的资源（磁盘空间、CPU 时间、进程表项等）来以使系统无法使用的方式调用系统调用。
+通常不可能编写 100\% 无 bug 的内核代码或设计无 bug 的硬件；
+如果恶意用户代码的编写者意识到了内核或硬件的 bug，他们就会利用它们。
+即使在成熟、广泛使用的内核（如 Linux）中，人们也经常发现以前未知的漏洞~\cite{mitre:cves}。
+最后，用户代码和内核代码之间的区别有时是模糊的：一些特权用户级进程可能会提供基本服务，并且实际上是操作系统的一部分，而在一些操作系统中，特权用户代码可以将新代码插入到内核中（如 Linux 的可加载内核模块和 eBPF）。
+作为针对内核 bug 的部分防御，xv6 代码包括了对不一致和不可恢复错误的检查，并将调用 {\tt panic()} 做出“恐慌（panic）”响应。
+该函数打印一条错误消息并停止系统。恐慌是不希望看到的，但比继续执行要好。
+通常，恐慌是由于内核 bug 导致内核数据不正确或导致内核执行非法操作（例如引用不存在的内存）而引起的；
+在这种情况下，使用 {\tt panic()} 停止执行比尝试在不一致的状态下继续运行更安全。
+内核开发人员对恐慌的反应将是努力识别并修复底层的代码 bug。
 %% 
 \section{Real world}
 %% 
 
-Most operating systems have adopted the process concept, and most
-processes look similar to xv6's.  Modern operating systems, however,
-support several threads within a process, to allow a single process to
-exploit multiple CPUs.  Supporting multiple threads in a
-process involves quite a bit of machinery that xv6 doesn't have,
-often including interface changes (e.g., Linux's
-\lstinline{clone},
-a variant of
-\lstinline{fork}),
-to control which aspects of
-a process threads share.
+大多数操作系统都采用了进程概念，而且大多数进程看起来与 xv6 的相似。
+然而，现代操作系统在一个进程内支持多个线程，以允许单个进程利用多个 CPU。
+在一个进程中支持多个线程涉及到相当多的 xv6 所没有的机制，通常包括接口更改（例如 Linux 的 \lstinline{clone}，它是 \lstinline{fork} 的一种变体），以控制线程共享进程的哪些方面。
 %% 
 \section{Exercises}
 %%
@@ -689,7 +397,6 @@ a process threads share.
 
 \item Add a system call to xv6
   that returns the amount of free memory available.
-
 % break *0x3ffffff000
 % disas 0x3ffffff000,+8
 % set disassemble-next-line auto

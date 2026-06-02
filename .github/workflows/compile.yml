@@ -11,28 +11,31 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          lfs: true # 🌟 确保如果字体用了 Git LFS 能够被真正下载下来
 
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          # 安装完整版 TeX Live 和必要的绘图工具
-          # texlive-full 会直接包含 gnuplot-lua-tikz.sty
+          # 安装完整版 TeX Live 和必要的绘图工具（已包含 xelatex）
           sudo apt-get install -y \
             texlive-full \
             make \
             inkscape \
             gnuplot \
             git
-          # 🌟 核心：手动下载并安装 mpage 的 deb 包
+          # 手动下载并安装 mpage 的 deb 包
           wget http://mirrors.kernel.org/ubuntu/pool/universe/m/mpage/mpage_2.5.6+dfsg-1_amd64.deb
           sudo apt-get install -y ./mpage_2.5.6+dfsg-1_amd64.deb
 
       - name: Build Book
         run: |
-          # 检查文件位置（用于调试，如果还报错可以看日志）
+          # 🌟 刷新系统字体缓存，确保刚提交的本地 font/ 目录字体能被 xelatex 正确识别
+          sudo fc-cache -f -v
+
+          # 检查文件位置（用于调试）
           kpsewhich gnuplot-lua-tikz.sty || echo "Still not found"
           
-          # 直接运行 make
+          # 直接运行 make（前提是你在本地已经把 Makefile 里的 pdflatex 改成了 xelatex）
           make
 
       - name: Upload PDF
