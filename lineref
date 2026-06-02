@@ -4,7 +4,7 @@ import os
 import re
 import sys
 
-if len(sys.argv) < 4:  # 修正了参数个数检查
+if len(sys.argv) < 4:
    print("error: too few arguments", file=sys.stderr)
 
 xv6src = sys.argv[2]
@@ -23,7 +23,7 @@ def line_number(path, i, line):
 def lookup_fileref_booklet(fname):
    p = xv6booklet
    try:
-      with open(p +'/'+fname, encoding='utf-8') as f: # 显式指定utf-8
+      with open(p +'/'+fname, encoding='utf-8') as f:
          line = f.readline()         
          return line_number(p, 1, line)
    except IOError:
@@ -48,7 +48,7 @@ def lookup_regex(path, fname, pat1, pat2=None):
    j = None
    p = p1
    try:
-      with open(path+'/'+fname, encoding='utf-8') as f:  # 显式指定utf-8
+      with open(path+'/'+fname, encoding='utf-8') as f:  
          line = f.readline()
          while line:
             m = p.search(line)
@@ -75,8 +75,8 @@ def lookup_regex(path, fname, pat1, pat2=None):
       return (None, None)
    
 def lineref(l):
-   # file:/pattern/delta -> 改为非贪婪 [^}]* 确保局限在花括号内
-   p = re.compile(r'\\lineref{([^:]*?):\/([^\/]*?)\/([+-]?\d+)?}')
+   # file:/pattern/delta
+   p = re.compile(r'\\lineref{(.*):\/(.*)\/([+-]?\d+)?}',re.UNICODE)
    m = p.search(l)
    if m != None:
       f = m.groups()[0]
@@ -87,14 +87,11 @@ def lineref(l):
       if m.groups()[2] != None:
          delta = int(m.groups()[2])
       if i != None:
-         # 仅替换匹配到的 \lineref 部分，不要破坏整行文字
-         matched_str = m.group(0)
-         replaced_str = '\\showlineref{%s}{%s}{%s}' % (f, str(i+delta), fmt_line(i0+delta))
-         l = l.replace(matched_str, replaced_str)
+         l = p.sub(r'\\showlineref{%s}{%s}{%s}' % (f,str(i+delta),fmt_line(i0+delta)), l)
          print(l, end="")
       return
    # fileref
-   p = re.compile(r'\\fileref\{([^}]*)\}')
+   p = re.compile(r'\\fileref\{([^}]*)\}',re.UNICODE)
    m = p.search(l)
    if m != None:
       f = m.groups()[0]
@@ -103,9 +100,8 @@ def lineref(l):
       l = p.sub(r'\\showfileref{%s}{%s}' % (f, fmt_line(n0)), l)
       print(l, end="")
       return
-
-   # file:/pattern/delta,pattern/delta -> 同样改为非贪婪匹配
-   p = re.compile(r'\\linerefs{([^:]*?):\/([^\/]*?)\/([+-]?\d+)?,\/([^\/]*?)\/([+-]?\d+)?}')
+   # file:/pattern/delta,pattern/delta
+   p = re.compile(r'\\linerefs{(.*):\/(.*)\/([+-]?\d+)?,\/(.*)\/([+-]?\d+)?}',re.UNICODE)
    m = p.search(l)
    if m != None:
       f = m.groups()[0]
@@ -118,14 +114,11 @@ def lineref(l):
       if m.groups()[4] != None:
          delta2 = int(m.groups()[4])
       if i != None and j != None:
-         matched_str = m.group(0)
-         replaced_str = '\\showlinerefs{%s}{%s}{%s}{%s}{%s}' % (f, str(i+delta1), str(j+delta2), fmt_line(i0+delta1), fmt_line(j0+delta2))
-         l = l.replace(matched_str, replaced_str)
+         l = p.sub(r'\\showlinerefs{%s}{%s}{%s}{%s}{%s}' % (f, str(i+delta1), str(j+delta2), fmt_line(i0+delta1), fmt_line(j0+delta2)), l)
          print(l, end="")
       return
    print(l, end="")
 
-# 显式指定 utf-8 编码读取 tex 文件
 with open(sys.argv[1], encoding='utf-8') as f:  
    line = f.readline()
    while line:

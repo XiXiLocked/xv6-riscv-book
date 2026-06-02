@@ -107,7 +107,7 @@ def figref(l):
    print(l, end="")
 
 def caption(fname):
-   with open(fname) as f:  
+   with open(fname, encoding='utf-8') as f:  
       line = f.readline()
       while line:
          if not line.startswith("."):
@@ -115,7 +115,7 @@ def caption(fname):
          line = f.readline()
 
 def istable(fname):
-   with open(fname) as f:  
+   with open(fname, encoding='utf-8') as f:  
       line = f.readline()
       while line:
          if line.startswith(".TS"):
@@ -125,7 +125,7 @@ def istable(fname):
 
 def table(fname):
    try: 
-      with open(fname) as f:  
+      with open(fname, encoding='utf-8') as f:  
          print(r'\begin{tabular}{ll}')
          line = f.readline()  # F1
          line = f.readline()  # .TS
@@ -157,7 +157,7 @@ def insert(l):
    l = l.rstrip('\n')
    fname = l.split(' ')[1]
    try: 
-      with open(fname) as f:
+      with open(fname, encoding='utf-8') as f:
          line = f.readline()
          while line:
             print(line, end="")
@@ -321,7 +321,7 @@ def tr2tex(l):
       l = dourl(l)
       print(l, end="")
    
-with open(sys.argv[1]) as f:  
+with open(sys.argv[1], encoding='utf-8') as f:  
    line = f.readline()
    while line:
        tr2tex(line)
