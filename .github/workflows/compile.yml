@@ -36,12 +36,11 @@ jobs:
           kpsewhich gnuplot-lua-tikz.sty || echo "Still not found"
           
           # 直接运行 make（前提是你在本地已经把 Makefile 里的 pdflatex 改成了 xelatex）
-          make
+          make booklet
 
-      - name: Upload PDF
+      - name: Upload FMT Folder
         uses: actions/upload-artifact@v4
         with:
-          name: Book-PDF
+          name: xv6-booklet-fmt-files  # 下载时的压缩包名字
           path: |
-            book.pdf
-            xv6-src-booklet.pdf
+            xv6-riscv-src-booklet/fmt/  # 🌟 将生成的整个 fmt 文件夹打包打包上传
