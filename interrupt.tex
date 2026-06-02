@@ -14,7 +14,7 @@
 
 驱动器与之交互的 UART 硬件是由 QEMU 模拟的 16550 芯片~\cite{ns16550a}。在真实的计算机上，16550 芯片会管理连接到终端或其他计算机的 RS232 串行链路。在运行 QEMU 时，它连接到您的键盘和显示器。
 
-UART 硬件对软件来说表现为一组 \indextext{内存映射} 的控制寄存器。也就是说，存在一些连接到 UART 设备的物理地址，因此对这些地址的读取和存储会与设备硬件交互，而不是与 RAM 交互。UART 的内存映射地址从 0x10000000 开始，即 {\tt UART0} \lineref{kernel/memlayout.h:/UART0.0x/}。有多个 UART 控制寄存器，每个宽度为一个字节。它们相对于 {\tt UART0} 的偏移量在 \lineref{kernel/uart.c:/define.RHR/} 中定义。例如，{\tt LSR} 寄存器包含一些位，指示是否有输入字符正在等待驱动器读取。这些字符（如果有）可以从 {\tt RHR} 寄存器读取。每次读取一个字符后，UART 硬件会将其从等待字符的内部 FIFO 中删除，并在 FIFO 为空时清除 {\tt LSR} 中的“就绪”位。为了发送数据，驱动器向 {\tt THR} 寄存器写入一个字节，这会使 UART 将该字节追加到其将在 RS232 串行链路上发送的字节 FIFO 中。UART 的发送和接收硬件在很大程度上是相互独立的。
+UART 硬件对软件来说表现为一组 \indextext{内存映射} 的控制寄存器。也就是说，存在一些连接到 UART 设备的物理地址，因此对这些地址的读取和存储会与设备硬件交互，而不是与 RAM 交互。UART 的内存映射地址从 0x10000000 开始，即 {\tt UART0} \lineref{kernel/memlayout.h:/UART0.+0x/}。有多个 UART 控制寄存器，每个宽度为一个字节。它们相对于 {\tt UART0} 的偏移量在 \lineref{kernel/uart.c:/define.RHR/} 中定义。例如，{\tt LSR} 寄存器包含一些位，指示是否有输入字符正在等待驱动器读取。这些字符（如果有）可以从 {\tt RHR} 寄存器读取。每次读取一个字符后，UART 硬件会将其从等待字符的内部 FIFO 中删除，并在 FIFO 为空时清除 {\tt LSR} 中的“就绪”位。为了发送数据，驱动器向 {\tt THR} 寄存器写入一个字节，这会使 UART 将该字节追加到其将在 RS232 串行链路上发送的字节 FIFO 中。UART 的发送和接收硬件在很大程度上是相互独立的。
 
 Xv6 的 {\tt main} 函数调用 {\tt consoleinit} \lineref{kernel/console.c:/^consoleinit/} 来初始化 UART 硬件。这段代码将 UART 配置为：当 UART 接收到每个输入字节时产生一个接收中断，并且每当 UART 完成发送一个输出字节时产生一个 \indextext{发送完成} 中断 \lineref{kernel/uart.c:/^uartinit/}。
 

@@ -198,7 +198,7 @@ Xv6 有许多长度为二的锁顺序链，涉及进程锁（每个 \lstinline{s
 
 Xv6 在 CPU 未持有任何自旋锁时会重新启用中断；它必须做一些簿记工作来处理嵌套的临界区。\lstinline{acquire} 调用 \indexcode{push_off} \lineref{kernel/spinlock.c:/^push_off/}，而 \lstinline{release} 调用 \indexcode{pop_off} \lineref{kernel/spinlock.c:/^pop_off/} 来跟踪当前 CPU 上锁的嵌套层级。当该计数降至零时，\lstinline{pop_off} 会恢复最外层临界区开始时的中断使能状态。\lstinline{intr_off} 和 \lstinline{intr_on} 函数执行 RISC-V 指令来分别禁用和启用中断。
 
-重要的是，\indexcode{acquire} 必须严格在设置 \lstinline{lk->locked} \lineref{kernel/spinlock.c:/sync_lock_test_and_set/} 之前调用 \lstinline{push_off}。如果顺序相反，就会存在一个短暂的窗口期，此时锁被持有但中断是使能的，一个时机不当的中断会导致系统死锁。类似地，重要的是 \indexcode{release} 必须在释放锁 \lineref{kernel/spinlock.c:/sync_lock_release/} 之后才调用 \indexcode{pop_off}。
+重要的是，\indexcode{acquire} 必须严格在设置 \lstinline{lk->locked} \lineref{kernel/spinlock.c:/__atomic_exchange_n/} 之前调用 \lstinline{push_off}。如果顺序相反，就会存在一个短暂的窗口期，此时锁被持有但中断是使能的，一个时机不当的中断会导致系统死锁。类似地，重要的是 \indexcode{release} 必须在释放锁 \lineref{kernel/spinlock.c:/sync_lock_release/} 之后才调用 \indexcode{pop_off}。
 
 %%
 \section{指令与内存顺序}
